@@ -20,6 +20,8 @@ import SettingsPage from '../features/settings/components/SettingsPage';
 import ProgressPage from '../features/progress/components/ProgressPage';
 import AchievementsPage from '../features/progress/components/AchievementsPage';
 import QuestionBankPage from '../features/questions/components/QuestionBankPage';
+import QuizListPage from '../features/quizzes/components/QuizListPage';
+import QuizEditorPage from '../features/quizzes/components/QuizEditorPage';
 import { NAV } from './layout/navConfig';
 import SplashScreen from '../shared/components/SplashScreen';
 import { toErrorMessage } from '../shared/utils/errors';
@@ -102,6 +104,8 @@ export default function AppRoutes() {
               <Route path="/roadmap" element={<RoadmapPage />} />
               <Route path="/roadmap/:topicId" element={<TopicDetailPage />} />
               <Route path="/questions" element={<QuestionBankPage />} />
+              <Route path="/quiz" element={<QuizListPage />} />
+              <Route path="/quiz/:quizId" element={<QuizEditorPage />} />
               <Route path="/progress" element={<ProgressPage />} />
               <Route path="/achievements" element={<AchievementsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

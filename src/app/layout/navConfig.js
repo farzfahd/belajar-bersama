@@ -46,8 +46,8 @@ export const NAV = [
     label: 'Quiz',
     icon: '🧪',
     path: '/quiz',
-    comingSoon: true,
-    note: 'Latihan pilihan ganda & skor per topik.'
+    comingSoon: false,
+    note: 'Susun kuis dari bank soal: tambah, hapus, dan atur urutan soal.'
   },
   {
     key: 'tasks',

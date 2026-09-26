@@ -16,6 +16,7 @@ import {
   updateQuestion
 } from '../services/questionService';
 import { toErrorMessage } from '../../../shared/utils/errors';
+import SubQuestionEditor from './SubQuestionEditor';
 
 export default function QuestionFormModal({
   open,
@@ -74,6 +75,8 @@ export default function QuestionFormModal({
 
   // Tipe 10: Case Study
   const [caseText, setCaseText] = useState('');
+  // Sub-soal studi kasus: maksimal SATU tingkat (lihat SubQuestionEditor).
+  const [subQuestions, setSubQuestions] = useState([]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,6 +106,8 @@ export default function QuestionFormModal({
       setExpectedOutput(initialData.expectedOutput || '');
       setSampleSolution(initialData.sampleSolution || '');
       setCaseText(initialData.caseText || '');
+      // Memuat sub-soal yang sudah tersimpan supaya mode edit tidak kehilangan isi.
+      setSubQuestions(Array.isArray(initialData.subQuestions) ? initialData.subQuestions : []);
       setStep(2); // langsung ke konten jika edit
     } else {
       setType('single');
@@ -130,6 +135,7 @@ export default function QuestionFormModal({
       setExpectedOutput('');
       setSampleSolution('');
       setCaseText('');
+      setSubQuestions([]);
       setStep(1);
     }
   }, [open, initialData, topics]);
@@ -219,20 +225,24 @@ export default function QuestionFormModal({
       starterCode,
       expectedOutput,
       sampleSolution,
-      caseText
+      caseText,
+      subQuestions
     };
 
     setSubmitting(true);
     try {
+      // `onSaved` menerima id soal (baru atau yang diperbarui) supaya pemanggil
+      // lain — misalnya Quiz Editor — bisa langsung memakai ulang soal itu.
+      let savedId = initialData?.id || null;
       if (initialData?.id) {
         await updateQuestion(spaceId, initialData.id, payload);
         toast.success('Soal berhasil diperbarui.');
       } else {
-        await createQuestion(spaceId, payload);
+        savedId = await createQuestion(spaceId, payload);
         toast.success('Soal baru berhasil ditambahkan.');
       }
       onClose();
-      if (onSaved) onSaved();
+      if (onSaved) onSaved(savedId);
     } catch (err) {
       toast.error(toErrorMessage(err, 'Gagal menyimpan soal.'));
     } finally {
@@ -661,15 +671,18 @@ export default function QuestionFormModal({
 
             {/* Studi Kasus */}
             {type === 'case_study' && (
-              <div>
-                <label className="eyebrow block mb-1">Teks Kasus / Cerita Studi *</label>
-                <textarea
-                  rows={5}
-                  value={caseText}
-                  onChange={(e) => setCaseText(e.target.value)}
-                  className="w-full rounded-smc border border-line bg-bg2 p-3 text-[13.5px] text-ink"
-                  placeholder="Tuliskan latar belakang kasus yang lengkap di sini..."
-                />
+              <div className="space-y-3">
+                <div>
+                  <label className="eyebrow block mb-1">Teks Kasus / Cerita Studi *</label>
+                  <textarea
+                    rows={5}
+                    value={caseText}
+                    onChange={(e) => setCaseText(e.target.value)}
+                    className="w-full rounded-smc border border-line bg-bg2 p-3 text-[13.5px] text-ink"
+                    placeholder="Tuliskan latar belakang kasus yang lengkap di sini..."
+                  />
+                </div>
+                <SubQuestionEditor value={subQuestions} onChange={setSubQuestions} disabled={submitting} />
               </div>
             )}
           </div>

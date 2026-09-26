@@ -1590,8 +1590,8 @@ async function main() {
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code_missing'),
       questionData({ type: 'code' })));
 
-    // subQuestions kosong sah (form belum punya editor sub-soal & grading.js
-    // memperlakukan daftar kosong sebagai soal otomatis).
+    // subQuestions kosong tetap sah: grading.js memperlakukan daftar kosong
+    // sebagai soal otomatis (CP1-STEP4: form kini punya editor sub-soal).
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case'),
       questionData({ type: 'case_study', caseText: 'Sebuah kasus...', subQuestions: [] })));
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_sub'),
@@ -1614,6 +1614,63 @@ async function main() {
       })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_badsub'),
       questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: ['bukan-map'] })));
+  });
+
+  // ---------- CP1-STEP4: studi kasus maksimal 1 tingkat ----------
+  await it('CP1/CS: sub-soal satu tingkat sah untuk 7 tipe otomatis', async () => {
+    const sub = (s) => questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: [s] });
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_bool'), sub({
+      type: 'boolean', correctBoolean: false
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_single'), sub({
+      type: 'single', options: ['A', 'B'], answerIndex: 1
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_short'), sub({
+      type: 'short_answer', acceptedAnswers: ['ya']
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_match'), sub({
+      type: 'matching', pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_order'), sub({
+      type: 'ordering', items: ['a', 'b']
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_num'), sub({
+      type: 'numerical', correctValue: 3, tolerance: 1
+    })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_multi'), sub({
+      type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [0, 2]
+    })));
+  });
+
+  await it('CP1/CS: nested >1 tingkat DITOLAK rules', async () => {
+    // Sub-soal yang membawa subQuestions sendiri = nesting tingkat 2.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_nested'), questionData({
+      type: 'case_study',
+      caseText: 'Kasus',
+      subQuestions: [{
+        type: 'single',
+        options: ['A', 'B'],
+        answerIndex: 0,
+        subQuestions: [{ type: 'boolean', correctBoolean: true }]
+      }]
+    })));
+    // Varian kunci `subQuestion` (singular) juga ditolak.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_nested2'), questionData({
+      type: 'case_study',
+      caseText: 'Kasus',
+      subQuestions: [{ type: 'boolean', correctBoolean: true, subQuestion: { type: 'boolean' } }]
+    })));
+    // Tipe yang butuh manual / nesting tidak boleh jadi sub-soal.
+    for (const [suffix, sub] of [
+      ['essay', { type: 'essay', sampleAnswer: 'x' }],
+      ['code', { type: 'code', starterCode: 'x' }],
+      ['case', { type: 'case_study', caseText: 'x' }],
+      ['unknown', { type: 'mystery' }],
+      ['notype', {}]
+    ]) {
+      await assertFails(setDoc(doc(fsDb(alice), `spaces/space1/questions/qa_cs_bad_${suffix}`),
+        questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: [sub] })));
+    }
   });
 
   // ---------- CP1-A: keamanan bank soal ----------
@@ -1828,6 +1885,196 @@ async function main() {
       planData({ date: '2026-09-28', items: 'bukan-map' })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/dailyPlans/alice_2026-09-29'),
       planData({ date: '2026-09-29', note: 42 })));
+  });
+
+  // ---------- quizzes (CP1 foundation) ----------
+  const quizSettings = (o = {}) => ({
+    questionCount: 10,
+    randomizeQuestionOrder: false,
+    randomizeOptionOrder: false,
+    timeLimitMinutes: 0,
+    passingScorePercent: 70,
+    maxAttempts: 3,
+    showAnswerMode: 'after_all',
+    showExplanation: true,
+    allowRetry: true,
+    ...o
+  });
+
+  const quizData = (o = {}) => ({
+    title: 'Kuis Matematika',
+    description: 'Bab 1',
+    topicId: 'topic1',
+    questionIds: ['q_ok_shared', 'q_2opsi'],
+    settings: quizSettings(),
+    createdBy: 'alice',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    schemaVersion: 1,
+    ...o
+  });
+
+  const quizIds = (n) => Array.from({ length: n }, (_, i) => `q${i + 1}`);
+
+  await it('CP1/QUIZ: anggota membuat kuis valid; non-member & createdBy palsu ditolak', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'), quizData()));
+    // Kuis boleh bercampur soal: snapshot boleh menunjuk soal shared maupun
+    // milik sendiri, dan questionIds TIDAK harus terurut.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_1soal'),
+      quizData({ questionIds: ['q_ok_shared'] })));
+    // createdBy harus pemanggil.
+    await assertFails(setDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_paksa'),
+      quizData({ createdBy: 'alice' })));
+    // Anggota ruang lain (carol) tidak boleh membuat kuis di space1.
+    await assertFails(setDoc(doc(fsDb(carolCP3), 'spaces/space1/quizzes/qu_asing'),
+      quizData({ createdBy: 'carol' })));
+    // Anonim juga ditolak.
+    await assertFails(setDoc(doc(fsDb(unauthed()), 'spaces/space1/quizzes/qu_anon'),
+      quizData({ createdBy: 'anon' })));
+  });
+
+  await it('CP1/QUIZ: kedua anggota boleh baca; non-member ditolak', async () => {
+    await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok')));
+    await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_ok')));
+    await assertFails(getDoc(doc(fsDb(carolCP3), 'spaces/space1/quizzes/qu_ok')));
+    await assertFails(getDoc(doc(fsDb(unauthed()), 'spaces/space1/quizzes/qu_ok')));
+    // List polos untuk anggota sah (aturan read = isMember tanpa filter field).
+    const listAlice = await getDocs(collection(fsDb(alice), 'spaces/space1/quizzes'));
+    assert.equal(listAlice.docs.length, 2);
+    await assertFails(getDocs(collection(fsDb(carolCP3), 'spaces/space1/quizzes')));
+  });
+
+  await it('CP1/QUIZ: hanya pembuat yang boleh update; createdBy & createdAt immutable', async () => {
+    await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'), {
+      title: 'Kuis Matematika (revisi)',
+      questionIds: ['q_2opsi', 'q_ok_shared', 'q_20opsi'],
+      settings: quizSettings({ questionCount: 3, timeLimitMinutes: 15, showAnswerMode: 'after_each' }),
+      updatedAt: serverTimestamp()
+    }));
+    // Partner boleh baca tapi tidak boleh mengubah / mengambil alih kuis.
+    await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_ok'),
+      { title: 'Dibajak', updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_ok'), { createdBy: 'bob' }));
+    // createdBy & createdAt tidak bisa diubah oleh pemiliknya sendiri.
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'), { createdBy: 'bob' }));
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'),
+      { createdAt: new Date() }));
+    // createdBy tidak boleh "diambil" walau field lain sah.
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'),
+      { createdBy: 'carol', title: 'Judul baru', updatedAt: serverTimestamp() }));
+  });
+
+  await it('CP1/QUIZ: snapshot questionIds — batas 50, duplikat & struktur salah ditolak', async () => {
+    // 50 soal (batas atas) sah.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_50'),
+      quizData({ questionIds: quizIds(50) })));
+    // 51 soal ditolak.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_51'),
+      quizData({ questionIds: quizIds(51) })));
+    // 0 soal ditolak (snapshot minimal 1).
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_kosong'),
+      quizData({ questionIds: [] })));
+    // Duplikat ditolak.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_dup'),
+      quizData({ questionIds: ['q_ok_shared', 'q_ok_shared'] })));
+    // Elemen non-string / kosong ditolak (indeks 0 diperiksa rules).
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_angka'),
+      quizData({ questionIds: [1, 2, 3, 4] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_kosongis'),
+      quizData({ questionIds: [''] })));
+    // questionIds bukan list ditolak.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_bukanlist'),
+      quizData({ questionIds: 'q_ok_shared' })));
+    // Batas yang sama berlaku saat update snapshot.
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_50'),
+      { questionIds: quizIds(51) }));
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_50'),
+      { questionIds: ['a', 'a'] }));
+    await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_50'),
+      { questionIds: ['a', 'b'], updatedAt: serverTimestamp() }));
+  });
+
+  await it('CP1/QUIZ: field dasar & struktur tidak valid ditolak', async () => {
+    // Judul wajib & batas panjang.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_judulkosong'),
+      quizData({ title: '' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_judulpanjang'),
+      quizData({ title: 'x'.repeat(201) })));
+    // Deskripsi wajib string & batas panjang.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_deskripsiAngka'),
+      quizData({ description: 42 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_deskripsiPanjang'),
+      quizData({ description: 'y'.repeat(2001) })));
+    // Topik wajib diisi dan harus benar-benar ada.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_topikKosong'),
+      quizData({ topicId: '' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_topikHantu'),
+      quizData({ topicId: 'tidak_ada' })));
+    // createdBy harus pemanggil, createdAt wajib ada, schemaVersion dikunci.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_bikuncibuatan'),
+      quizData({ createdBy: 'bob' })));
+    const tanpaCreatedAt = quizData();
+    delete tanpaCreatedAt.createdAt;
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_tanpaCreatedAt'), tanpaCreatedAt));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_skemaSalah'),
+      quizData({ schemaVersion: 2 })));
+  });
+
+  await it('CP1/QUIZ: settings divalidasi per-field (tipe, rentang, enum, kunci asing)', async () => {
+    // Batas atas yang sah diterima.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_setMaks'),
+      quizData({ settings: quizSettings({
+        questionCount: 50, timeLimitMinutes: 480, passingScorePercent: 100, maxAttempts: 20
+      }) })));
+    // Rentang nilai dilanggar.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_count0'),
+      quizData({ settings: quizSettings({ questionCount: 0 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_count51'),
+      quizData({ settings: quizSettings({ questionCount: 51 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_waktuMaks'),
+      quizData({ settings: quizSettings({ timeLimitMinutes: 481 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_lulusAngka'),
+      quizData({ settings: quizSettings({ passingScorePercent: 101 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_coba0'),
+      quizData({ settings: quizSettings({ maxAttempts: 0 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_coba21'),
+      quizData({ settings: quizSettings({ maxAttempts: 21 }) })));
+    // Tipe salah: bool & int tidak boleh tertukar, mode harus dari enum.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_retryString'),
+      quizData({ settings: quizSettings({ allowRetry: 'true' }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_acakAngka'),
+      quizData({ settings: quizSettings({ randomizeQuestionOrder: 1 }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_modeNgawur'),
+      quizData({ settings: quizSettings({ showAnswerMode: 'selalu' }) })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pembahasanAngka'),
+      quizData({ settings: quizSettings({ showExplanation: 1 }) })));
+    // Kunci asing ditolak (settings dikunci hasOnly).
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_kunciAsing'),
+      quizData({ settings: quizSettings({ autoSubmit: true }) })));
+    // settings wajib ada & berupa map.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_settingsAngka'),
+      quizData({ settings: 7 })));
+    const tanpaSettings = quizData();
+    delete tanpaSettings.settings;
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_tanpaSettings'), tanpaSettings));
+  });
+
+  await it('CP1/QUIZ: hapus hanya pembuat; Question document tidak ikut terhapus', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_purge'), quizData()));
+    // Partner boleh baca tapi tidak boleh menghapus.
+    await assertFails(deleteDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_purge')));
+    await assertFails(deleteDoc(doc(fsDb(carolCP3), 'spaces/space1/quizzes/qu_purge')));
+    // Pembuat boleh menghapus kuisnya.
+    await assertSucceeds(deleteDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_purge')));
+    // Dokumen benar-benar hilang. CATATAN: getDoc TIDAK dipakai di sini sebagai
+    // pembuktian — aturan read kuis hanya `isMember` (tidak bergantung
+    // resource.data), jadi membaca dokumen yang sudah terhapus tetap succeed
+    // dan hanya mengembalikan `exists() === false`.
+    const setelahHapus = await getDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_purge'));
+    assert.equal(setelahHapus.exists(), false);
+    // Konsekuensi penting: soal yang dipakai kuis itu UTUH di bank soal.
+    await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_shared')));
+    await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/questions/q_ok_shared')));
   });
 
   await testEnv.cleanup();

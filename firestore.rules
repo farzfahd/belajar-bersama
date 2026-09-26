@@ -708,15 +708,32 @@ service cloud.firestore {
         && (!('sampleSolution' in d) || (d.sampleSolution is string && d.sampleSolution.size() <= 10000));
     }
 
-    // subQuestions boleh KOSONG: form soal belum punya editor sub-soal
-    // (QuestionFormModal hanya mengirim caseText) sehingga questionService
-    // menulis [], dan grading.js memang memperlakukan daftar kosong sebagai
+    // subQuestions boleh KOSONG: `grading.js` memperlakukan daftar kosong sebagai
     // soal yang dinilai otomatis. Elemen pertama wajib map bila ada
     // (rules hanya bisa memeriksa indeks 0).
+    //
+    // CP1-STEP4 — nested MAKSIMAL SATU tingkat, dikunci di server:
+    // sub-soal tidak boleh membawa `subQuestions`/`subQuestion` sendiri, dan
+    // tipenya harus salah satu tipe yang dinilai otomatis (bukan essay/code/
+    // case_study yang butuh manual atau nesting).
+    // CATATAN BATAS: hanya `subQuestions[0]` yang bisa diperiksa (sama seperti
+    // optionListOk). Isi seluruh elemen divalidasi penuh di sisi client oleh
+    // `normalizeSubQuestions` (questionTypeFields.js) sebelum ditulis.
     function validCaseStudy(d) {
       return d.caseText is string && d.caseText.size() > 0 && d.caseText.size() <= 10000
         && d.subQuestions is list && d.subQuestions.size() <= 10
-        && (d.subQuestions.size() == 0 || d.subQuestions[0] is map);
+        && (
+          d.subQuestions.size() == 0
+          || (
+            d.subQuestions[0] is map
+            && !('subQuestions' in d.subQuestions[0])
+            && !('subQuestion' in d.subQuestions[0])
+            && d.subQuestions[0].type in [
+                 'single', 'multiple', 'boolean', 'short_answer',
+                 'matching', 'ordering', 'numerical'
+               ]
+          )
+        );
     }
 
     function validQuestionTypeSpecific(d) {
@@ -771,6 +788,76 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && immutable(['createdBy', 'createdAt']);
 
+      allow delete: if isMember(spaceId)
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // ---------- quizzes (kumpulan soal yang dikonfigurasi) ----------
+    // Satu dokumen = satu kuis. `questionIds` adalah SNAPSHOT id soal yang
+    // dipakai, BUKAN urutan live dari Question Bank: quiz tidak bergantung
+    // pada urutan/keberadaan dokumen soal. Question document tetap berdiri
+    // sendiri di koleksi `questions` (tidak pernah di-embed, dan tidak ikut
+    // terhapus saat kuis dihapus).
+    //
+    // BATAS BAHASA RULES (tidak ada loop atas elemen list):
+    //   - Elemen `questionIds` hanya diperiksa pada indeks 0 (min 1 soal, jadi
+    //     indeks 1 TIDAK boleh disentuh agar quiz 1-soal tetap sah). Sisanya
+    //     dijaga lewat jumlah (1..50) dan keunikan `toSet().size()`.
+    //     Pembersihan/trim per-elemen ditegakkan di service (quizService.js).
+    //   - Keberadaan tiap questionId TIDAK diverifikasi di sini: itu butuh satu
+    //     get() per id (hingga 50 baca per write) dan tidak mungkin ditulis
+    //     sebagai loop. Diperiksa di service/UI, bukan di rules.
+    function validQuizSettings(s) {
+      return s is map
+        && s.keys().hasOnly([
+             'questionCount', 'randomizeQuestionOrder', 'randomizeOptionOrder',
+             'timeLimitMinutes', 'passingScorePercent', 'maxAttempts',
+             'showAnswerMode', 'showExplanation', 'allowRetry'
+           ])
+        && (!('questionCount' in s) || (s.questionCount is int && s.questionCount >= 1 && s.questionCount <= 50))
+        && (!('randomizeQuestionOrder' in s) || s.randomizeQuestionOrder is bool)
+        && (!('randomizeOptionOrder' in s) || s.randomizeOptionOrder is bool)
+        && (!('timeLimitMinutes' in s) || (s.timeLimitMinutes is int && s.timeLimitMinutes >= 0 && s.timeLimitMinutes <= 480))
+        && (!('passingScorePercent' in s) || (s.passingScorePercent is int && s.passingScorePercent >= 0 && s.passingScorePercent <= 100))
+        && (!('maxAttempts' in s) || (s.maxAttempts is int && s.maxAttempts >= 1 && s.maxAttempts <= 20))
+        && (!('showAnswerMode' in s) || s.showAnswerMode in ['none', 'after_each', 'after_all'])
+        && (!('showExplanation' in s) || s.showExplanation is bool)
+        && (!('allowRetry' in s) || s.allowRetry is bool);
+    }
+
+    function validQuiz(spaceId, d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        // Topik wajib diisi dan harus benar-benar ada — pola sama dengan
+        // questions & quizAttempts (berbeda dari tasks yang boleh kosong/umum).
+        && d.topicId is string && d.topicId.size() > 0
+        && topicExistsOrEmpty(spaceId, d.topicId)
+        && d.questionIds is list && d.questionIds.size() >= 1 && d.questionIds.size() <= 50
+        && d.questionIds.toSet().size() == d.questionIds.size()
+        && d.questionIds[0] is string && d.questionIds[0].size() > 0 && d.questionIds[0].size() <= 100
+        && d.settings is map && validQuizSettings(d.settings)
+        && d.createdBy is string && d.createdBy.size() > 0
+        && 'createdAt' in d && d.createdAt is timestamp
+        && 'updatedAt' in d && d.updatedAt is timestamp
+        && d.schemaVersion == 1;
+    }
+
+    match /spaces/{spaceId}/quizzes/{quizId} {
+      // Kedua anggota boleh baca (belajar berdua). Kuis tidak punya field
+      // visibility, jadi modelnya sama seperti tasks/quizAttempts.
+      allow read: if isMember(spaceId);
+
+      allow create: if isMember(spaceId) && validQuiz(spaceId, request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      // Hanya pembuat yang boleh mengubah; createdBy & createdAt immutable,
+      // jadi kuis tidak bisa "diambil" anggota lain (pola sama seperti tasks).
+      allow update: if isMember(spaceId) && validQuiz(spaceId, request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdBy == request.auth.uid
+        && immutable(['createdBy', 'createdAt']);
+
+      // Hapus hanya pembuat. Menghapus kuis TIDAK menghapus Question document.
       allow delete: if isMember(spaceId)
         && resource.data.createdBy == request.auth.uid;
     }

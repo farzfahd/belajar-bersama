@@ -13,7 +13,8 @@ export const COL = {
   resources: 'resources',
   resourceStates: 'resourceStates',
   noteReports: 'noteReports',
-  questions: 'questions'
+  questions: 'questions',
+  quizzes: 'quizzes'
 };
 
 export const QUESTION_TYPES = {
@@ -45,6 +46,30 @@ export const QUESTION_TYPE_LABELS = {
 export const QUESTION_LIMITS = {
   minOptions: 2,
   maxOptions: 20
+};
+
+// Batas & enum kuis (CP1 foundation). Nilai-nilai ini disalin apa adanya ke
+// `settings` pada dokumen quizzes, dan divalidasi ulang oleh Firestore Rules
+// (lihat validQuizSettings) — ubah di sini DAN di rules bila perlu.
+export const QUIZ_LIMITS = {
+  minQuestions: 1,
+  maxQuestions: 50,
+  maxTitle: 200,
+  maxDescription: 2000,
+  maxTimeLimitMinutes: 480,
+  maxAttempts: 20
+};
+
+export const QUIZ_SETTINGS_DEFAULTS = {
+  questionCount: 10,
+  randomizeQuestionOrder: false,
+  randomizeOptionOrder: false,
+  timeLimitMinutes: 0,
+  passingScorePercent: 70,
+  maxAttempts: 3,
+  showAnswerMode: 'after_all',
+  showExplanation: true,
+  allowRetry: true
 };
 
 export const STATUS = {
