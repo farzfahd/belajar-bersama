@@ -246,12 +246,57 @@ export async function leaveSpace(spaceId) {
     );
   }
 
+  // --- DIAGNOSTIC: production state audit ---
+  const profileSnap = await getDoc(profileRef);
+  const profileData = profileSnap.data();
+  const nextMids = nextMemberIds(memberIds, uid);
+
+  console.info('[LEAVE-DIAG] space exists:', space.exists());
+  console.info('[LEAVE-DIAG] memberIds:', memberIds);
+  console.info('[LEAVE-DIAG] memberCount:', memberIds.length);
+  console.info('[LEAVE-DIAG] caller uid:', uid);
+  console.info('[LEAVE-DIAG] caller index:', index);
+  console.info('[LEAVE-DIAG] nextMemberIds:', nextMids);
+  console.info('[LEAVE-DIAG] profile.spaceId:', profileData?.spaceId);
+  console.info('[LEAVE-DIAG] profileSpaceMatches:', profileData?.spaceId === spaceId);
+
+  // --- DIAGNOSTIC: auth token verification ---
+  try {
+    const user = auth.currentUser;
+    if (user) {
+      console.info('[LEAVE-DIAG] auth.currentUser.uid:', user.uid);
+      console.info('[LEAVE-DIAG] auth.currentUser.email:', user.email);
+      console.info('[LEAVE-DIAG] auth.currentUser.emailVerified:', user.emailVerified);
+
+      await user.getIdToken(true);
+      const tokenResult = await user.getIdTokenResult();
+      console.info('[LEAVE-DIAG] token.claims.email_verified:', tokenResult.claims.email_verified);
+      console.info('[LEAVE-DIAG] token.issuedAtTime:', tokenResult.issuedAtTime);
+
+      // Check for mismatch
+      if (user.emailVerified !== tokenResult.claims.email_verified) {
+        console.warn('[LEAVE-DIAG] MISMATCH: user.emailVerified:', user.emailVerified, 'vs token.claims.email_verified:', tokenResult.claims.email_verified);
+      } else {
+        console.info('[LEAVE-DIAG] MATCH: user.emailVerified === token.claims.email_verified:', user.emailVerified);
+      }
+    }
+  } catch (diagErr) {
+    console.warn('[LEAVE-DIAG] Failed to get token diagnostics:', diagErr);
+  }
+  // --- END DIAGNOSTIC ---
+
   const batch = writeBatch(db);
   batch.update(spaceRef, { memberIds: nextMemberIds(memberIds, uid) });
   batch.update(profileRef, { spaceId: null });
+
   try {
     await batch.commit();
   } catch (err) {
+    // Log actual Firestore error before fallback
+    console.error('[LEAVE-DIAG] Firestore error code:', err?.code);
+    console.error('[LEAVE-DIAG] Firestore error message:', err?.message);
+    console.error('[LEAVE-DIAG] Firestore error name:', err?.name);
+
     if (err?.code === 'permission-denied') {
       // Kondisi berubah di tengah jalan (mis. tab lain sudah keluar / tulis
       // tidak lagi valid). Cek ulang dan selesaikan secara idempoten.
