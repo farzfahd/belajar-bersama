@@ -38,7 +38,7 @@ export const NAV = [
     label: 'Questions',
     icon: '❓',
     path: '/questions',
-    comingSoon: true,
+    comingSoon: false,
     note: 'Bank soal per topik + soal dari partner.'
   },
   {

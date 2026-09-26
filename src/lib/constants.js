@@ -12,7 +12,39 @@ export const COL = {
   noteStates: 'noteStates',
   resources: 'resources',
   resourceStates: 'resourceStates',
-  noteReports: 'noteReports'
+  noteReports: 'noteReports',
+  questions: 'questions'
+};
+
+export const QUESTION_TYPES = {
+  single: 'single',
+  multiple: 'multiple',
+  boolean: 'boolean',
+  short_answer: 'short_answer',
+  essay: 'essay',
+  matching: 'matching',
+  ordering: 'ordering',
+  numerical: 'numerical',
+  code: 'code',
+  case_study: 'case_study'
+};
+
+export const QUESTION_TYPE_LABELS = {
+  single: 'Pilihan Ganda',
+  multiple: 'Pilihan Ganda Kompleks',
+  boolean: 'Benar / Salah',
+  short_answer: 'Isian Singkat',
+  essay: 'Uraian / Esai',
+  matching: 'Menjodohkan',
+  ordering: 'Mengurutkan',
+  numerical: 'Numerik',
+  code: 'Soal Kode',
+  case_study: 'Studi Kasus'
+};
+
+export const QUESTION_LIMITS = {
+  minOptions: 2,
+  maxOptions: 20
 };
 
 export const STATUS = {

@@ -23,6 +23,7 @@ test('deep routes resolve to their parent navigation item', () => {
   assert.equal(navByPath('/achievements')?.key, 'achievements');
   assert.equal(navByKey('progress')?.comingSoon, false);
   assert.equal(navByKey('achievements')?.comingSoon, false);
+  assert.equal(navByKey('questions')?.comingSoon, false);
 });
 
 test('dashboard does not become active for unrelated descendants', () => {

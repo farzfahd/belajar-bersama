@@ -295,6 +295,46 @@ async function seed() {
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       schemaVersion: 1
     });
+
+    // Bahan uji CP-INVITE (buat kode undangan).
+    // Nama ruang sengaja berspasi ganda: client wajib mengirim nama APA ADANYA
+    // supaya sama dengan dokumen ini (rules membandingkan kesamaan persis).
+    await set('spaces/space_unik', {
+      name: 'Ruang  Bersama  Uji',
+      memberIds: ['hana'],
+      createdAt: serverTimestamp(),
+      schemaVersion: 1
+    });
+    await set('users/hana', {
+      displayName: 'Hana',
+      avatar: '',
+      color: '#4f9b78',
+      spaceId: 'space_unik',
+      schemaVersion: 1
+    });
+    // Nama melebihi batas skema (60): hanya mungkin bila dokumen diubah di luar
+    // aplikasi. Dipakai membuktikan invite untuk ruang ini HARUS ditolak rules
+    // (baik dikirim verbatim maupun setelah dipotong) → service menolak lokal.
+    await set('spaces/space_panjang', {
+      name: 'Nama Ruang Yang Sengaja Dibuat Sangat Panjang Melebihi Batas Skema Aplikasi',
+      memberIds: ['ivan'],
+      createdAt: serverTimestamp(),
+      schemaVersion: 1
+    });
+    await set('users/ivan', {
+      displayName: 'Ivan',
+      avatar: '',
+      color: '#7c8b55',
+      spaceId: 'space_panjang',
+      schemaVersion: 1
+    });
+    // Ruang sudah penuh (2 anggota) → tidak boleh ada invite lagi.
+    await set('spaces/space_penuh', {
+      name: 'Ruang Penuh',
+      memberIds: ['zoe', 'wati'],
+      createdAt: serverTimestamp(),
+      schemaVersion: 1
+    });
   });
 }
 
@@ -304,6 +344,11 @@ async function main() {
     projectId: PROJECT_ID,
     firestore: { rules }
   });
+  // WAJIB: hapus data sisa run sebelumnya. testEnv.cleanup() di akhir hanya
+  // membuang konteks/app, TIDAK menghapus dokumen, sehingga tanpa ini suite
+  // hanya lulus di emulator yang benar-benar kosong: dokumen sisa (mis.
+  // users/zoe, spaces/z2, invites terpakai) membuat assertSucceeds gagal.
+  await testEnv.clearFirestore();
   await seed();
 
   const alice = authenticated('alice');
@@ -805,6 +850,148 @@ async function main() {
     }));
     await assertFails(deleteDoc(doc(fsDb(eve), 'invites/invite_new_12345678901234567890')));
   });
+
+  // ============ 9b. CP-INVITE: pembuatan kode undangan ============
+  // Bug produksi yang diperbaiki: `expiresAt` dulu = Date.now() (jam PERANGKAT)
+  // + 24 jam apa adanya, sementara rule membatasinya dengan jam SERVER
+  // (`expiresAt <= request.time + 24 jam`, firestore.rules:939) → margin nol,
+  // jadi perangkat yang jamnya lebih cepat sedikit selalu ditolak
+  // permission-denied walau emulator (jam host sama) selalu lolos.
+  // Perbaikan ada di client (spaceService + utils/invite.js) — rules TIDAK diubah.
+  const INVITE_CAP = 24 * 60 * 60 * 1000; // plafon rule (= INVITE_TTL_MS)
+  const inviteCode = (tag) => `inv_${tag}`.padEnd(24, '0');
+  const inviteData = (o = {}) => ({
+    code: 'inv_placeholder0000000',
+    spaceId: 'space_unik',
+    spaceName: 'Ruang  Bersama  Uji',
+    createdBy: 'hana',
+    createdAt: serverTimestamp(),
+    used: false,
+    usedBy: null,
+    usedAt: null,
+    expiresAt: new Date(Date.now() + INVITE_CAP - 5 * 60 * 1000),
+    schemaVersion: 1,
+    ...o
+  });
+  const writeInvite = (ctx, tag, o = {}) => {
+    const code = inviteCode(tag);
+    return setDoc(doc(fsDb(ctx), `invites/${code}`), inviteData({ code, ...o }));
+  };
+
+  await it('CP-INVITE: owner ruang 1 anggota boleh membuat invite (nama ruang apa adanya)', async () => {
+    const hana = authenticated('hana');
+    // Nama ruang berspasi ganda dikirim verbatim → sama dengan dokumen ruang.
+    await assertSucceeds(writeInvite(hana, 'ok'));
+  });
+
+  await it('CP-INVITE: expiresAt dari jam perangkat yang lebih cepat dari server ditolak; payload bermargin lolos', async () => {
+    const hana = authenticated('hana');
+    // Perilaku LAMA (jam perangkat + 24 jam apa adanya) saat jam perangkat
+    // lebih cepat 1 menit → melewati plafon jam server → DENY.
+    await assertFails(writeInvite(hana, 'skew_buruk', {
+      expiresAt: new Date(Date.now() + INVITE_CAP + 60 * 1000)
+    }));
+    // Payload BARU: basis waktu server + margin 5 menit (skew 5 menit aman).
+    await assertSucceeds(writeInvite(hana, 'skew_server', {
+      expiresAt: new Date(Date.now() + INVITE_CAP - 5 * 60 * 1000)
+    }));
+    // Fallback jam perangkat dengan margin 1 jam.
+    await assertSucceeds(writeInvite(hana, 'skew_fallback', {
+      expiresAt: new Date(Date.now() + INVITE_CAP - 60 * 60 * 1000)
+    }));
+    // Invite yang waktunya sudah lewat tetap ditolak.
+    await assertFails(writeInvite(hana, 'kedaluwarsa', {
+      expiresAt: new Date(Date.now() - 60 * 1000)
+    }));
+  });
+
+  await it('CP-INVITE: ruang penuh / non-member / anonim tidak boleh membuat invite', async () => {
+    const zoe = authenticated('zoe');
+    await assertFails(writeInvite(zoe, 'penuh', {
+      spaceId: 'space_penuh',
+      spaceName: 'Ruang Penuh',
+      createdBy: 'zoe'
+    }));
+    // Isolasi syarat ukuran: alice ANGGOTA space1 (2 anggota) — semua syarat lain
+    // terpenuhi (nama & createdBy cocok) → satu-satunya penolak adalah
+    // `memberIds.size() == 1` (firestore.rules:937).
+    const alice = authenticated('alice');
+    await assertFails(writeInvite(alice, 'penuh_anggota', {
+      spaceId: 'space1',
+      spaceName: 'Ruang A',
+      createdBy: 'alice'
+    }));
+    const carol = authenticated('carol');
+    await assertFails(writeInvite(carol, 'nonmember', { createdBy: 'carol' }));
+    await assertFails(writeInvite(anon, 'anonim', { createdBy: 'anon' }));
+  });
+
+  await it('CP-INVITE: createdBy harus pembuatnya & invite tidak boleh dibuat sudah terpakai', async () => {
+    const hana = authenticated('hana');
+    // createdBy milik orang lain (ivan) = DENY (ownership).
+    await assertFails(writeInvite(hana, 'ownermismatch', { createdBy: 'ivan' }));
+    // used:true sejak pembuatan = DENY (invite sekali pakai, wajib unused).
+    await assertFails(writeInvite(hana, 'langsungpakai', {
+      used: true,
+      usedBy: 'ivan',
+      usedAt: new Date()
+    }));
+  });
+
+  await it('CP-INVITE: dokumen invite wajib berada di invites/{code} yang cocok', async () => {
+    const hana = authenticated('hana');
+    const data = inviteData({ code: inviteCode('kode_lain') });
+    await assertFails(setDoc(doc(fsDb(hana), `invites/${inviteCode('dokumen_lain')}`), data));
+  });
+
+  await it('CP-INVITE: nama ruang harus sama persis dengan dokumen ruang', async () => {
+    const hana = authenticated('hana');
+    // Versi "dirapikan/dipotong" (perilaku lama: trim + slice(0,60)) → DENY.
+    await assertFails(writeInvite(hana, 'nama_diubah', { spaceName: 'Ruang Bersama Uji' }));
+    await assertFails(writeInvite(hana, 'nama_dipotong', { spaceName: 'Ruang  Bersama  Uji'.slice(0, 5) }));
+    // Ruang dengan nama 75 karakter (di luar skema aplikasi): DUA-DUANYA
+    // ditolak rules — verbatim (melebihi 60) maupun dipotong (mismatch).
+    // Karena itu service menolak lebih awal dengan pesan yang bisa ditindaklanjuti.
+    const ivan = authenticated('ivan');
+    const panjang = 'Nama Ruang Yang Sengaja Dibuat Sangat Panjang Melebihi Batas Skema Aplikasi';
+    await assertFails(writeInvite(ivan, 'nama_panjang', {
+      spaceId: 'space_panjang',
+      spaceName: panjang,
+      createdBy: 'ivan'
+    }));
+    await assertFails(writeInvite(ivan, 'nama_panjang_potong', {
+      spaceId: 'space_panjang',
+      spaceName: panjang.slice(0, 60),
+      createdBy: 'ivan'
+    }));
+  });
+
+  await it('CP-INVITE: invite yang baru dibuat tetap bisa dipakai join (regresi)', async () => {
+    const hana = authenticated('hana');
+    const code = inviteCode('untuk_join');
+    await assertSucceeds(writeInvite(hana, 'untuk_join'));
+
+    const xenia = authenticated('xenia');
+    const batch = writeBatch(fsDb(xenia));
+    batch.update(doc(fsDb(xenia), 'spaces/space_unik'), {
+      memberIds: ['hana', 'xenia'],
+      _joinCode: code
+    });
+    batch.update(doc(fsDb(xenia), `invites/${code}`), {
+      used: true,
+      usedBy: 'xenia',
+      usedAt: serverTimestamp()
+    });
+    await assertSucceeds(batch.commit());
+    await assertSucceeds(updateDoc(doc(fsDb(xenia), 'users/xenia'), { spaceId: 'space_unik' }));
+    // Sekali pakai: undangan yang sama tidak bisa dipakai lagi.
+    const zoe = authenticated('zoe');
+    await assertFails(updateDoc(doc(fsDb(zoe), 'spaces/space_unik'), {
+      memberIds: ['hana', 'xenia', 'zoe'],
+      _joinCode: code
+    }));
+  });
+
   await it('memberIds ruang penuh tidak bisa diubah client', async () => {
     await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1'), { memberIds: ['alice', 'bob', 'carol'] }));
     await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1'), { memberIds: ['bob', 'alice'] }));
@@ -993,17 +1180,42 @@ async function main() {
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_priv'), questionData()));
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_shared'),
       questionData({ visibility: 'shared' })));
-    // 3 opsi: rules mengunci tepat 4 pilihan.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_3opsi'),
-      questionData({ options: ['a', 'b', 'c'] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_kosong'),
-      questionData({ prompt: '' })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ans4'),
-      questionData({ answerIndex: 4 })));
+    // Opsi dinamis 2..20 & validasi single choice
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_2opsi'),
+      questionData({ options: ['Ya', 'Tidak'], answerIndex: 0 })));
+    const twentyOpts = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_20opsi'),
+      questionData({ options: twentyOpts, answerIndex: 19 })));
+    // 1 opsi ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_1opsi'),
+      questionData({ options: ['Hanya satu'], answerIndex: 0 })));
+    // 21 opsi ditolak
+    const twentyOneOpts = Array.from({ length: 21 }, (_, i) => `Opsi ${i + 1}`);
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_21opsi'),
+      questionData({ options: twentyOneOpts, answerIndex: 0 })));
+    // answerIndex out of range ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ans_out'),
+      questionData({ options: ['A', 'B'], answerIndex: 2 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ans_neg'),
+      questionData({ options: ['A', 'B'], answerIndex: -1 })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ansstr'),
       questionData({ answerIndex: '1' })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_optKosong'),
-      questionData({ options: ['a', '', 'c', 'd'] })));
+    // Opsi duplikat ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_dup_opts'),
+      questionData({ options: ['Sama', 'Sama', 'Beda'] })));
+    // Multiple select tests
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_ok'),
+      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [0, 2] })));
+    // Multiple select: duplicate correctIndices ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_dup_idx'),
+      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [1, 1] })));
+    // Multiple select: correctIndex out of range ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_out_idx'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [5] })));
+    // Prompt kosong ditolak
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_kosong'),
+      questionData({ prompt: '' })));
+    // Topik palsu ditolak
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_topikPalsu'),
       questionData({ topicId: 'tidak_ada' })));
   });
@@ -1053,6 +1265,209 @@ async function main() {
     
     await assertFails(setDoc(doc(fsDb(bob), 'spaces/space1/questions/q_paksa'),
       questionData({ createdBy: 'alice' })));
+  });
+
+  // ---------- CP1-A: validasi struktur bank soal per tipe ----------
+  await it('CP1-A: single choice — batas 2/20 opsi & answerIndex dalam rentang', async () => {
+    const opts20 = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
+    // 20 opsi + kunci terakhir = ALLOW (batas atas).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_max'),
+      questionData({ options: opts20, answerIndex: 19 })));
+    // answerIndex -1 / >= options.size() / bukan int = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_neg'),
+      questionData({ options: ['A', 'B'], answerIndex: -1 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_over'),
+      questionData({ options: ['A', 'B'], answerIndex: 2 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_str'),
+      questionData({ options: ['A', 'B'], answerIndex: '0' })));
+    // Opsi kosong / bukan string / duplikat = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_blank'),
+      questionData({ options: ['', 'B'], answerIndex: 0 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_nonstr'),
+      questionData({ options: [1, 'B'], answerIndex: 0 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_dup'),
+      questionData({ options: ['Sama', 'Sama'], answerIndex: 0 })));
+    // type tak dikenal / single tanpa answerIndex = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_badtype'),
+      questionData({ type: 'pilihan_ganda' })));
+    const { answerIndex: _tanpaKunci, ...singleTanpaKunci } = questionData({ options: ['A', 'B'] });
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_nokey'),
+      singleTanpaKunci));
+  });
+
+  await it('CP1-A: multiple — correctIndices 1..size, unik, SEMUA dalam rentang', async () => {
+    // 2 opsi + 1 kunci = ALLOW (batas bawah).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_min'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [1] })));
+    // 20 opsi + kunci di batas atas = ALLOW.
+    const opts20 = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_max'),
+      questionData({ type: 'multiple', options: opts20, correctIndices: [0, 19] })));
+    // 5 opsi + kunci terakhir = ALLOW; indeks 5 (>= size) = DENY.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_edge'),
+      questionData({ type: 'multiple', options: ['A', 'B', 'C', 'D', 'E'], correctIndices: [4] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_edge_over'),
+      questionData({ type: 'multiple', options: ['A', 'B', 'C', 'D', 'E'], correctIndices: [0, 5] })));
+    // correctIndices kosong = DENY (minimal 1 kunci).
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_empty'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [] })));
+    // duplikat = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_dup'),
+      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [1, 1] })));
+    // indeks di luar rentang pada posisi mana pun = DENY (dulu hanya indeks 0 dicek).
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_out_first'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [99] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_out_second'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [0, 99] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_neg'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [-1, 0] })));
+    // kunci bukan int (string) = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_str'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: ['1'] })));
+    // correctIndices lebih banyak dari opsi = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_toomany'),
+      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [0, 1, 0] })));
+    // multiple tanpa correctIndices = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_nokey'),
+      questionData({ type: 'multiple', options: ['A', 'B'] })));
+  });
+
+  await it('CP1-A: boolean/short_answer/essay — struktur kunci sah & tidak sah', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool'),
+      questionData({ type: 'boolean', correctBoolean: false })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool_str'),
+      questionData({ type: 'boolean', correctBoolean: 'true' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool_missing'),
+      questionData({ type: 'boolean' })));
+
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short'),
+      questionData({ type: 'short_answer', acceptedAnswers: ['2', 'dua'] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_empty'),
+      questionData({ type: 'short_answer', acceptedAnswers: [] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_blank'),
+      questionData({ type: 'short_answer', acceptedAnswers: [''] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_num'),
+      questionData({ type: 'short_answer', acceptedAnswers: [2] })));
+
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay'),
+      questionData({ type: 'essay', sampleAnswer: 'Jawaban contoh yang panjang.' })));
+    // sampleAnswer opsional (data lama / soal esai polos tetap sah).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay_plain'),
+      questionData({ type: 'essay' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay_num'),
+      questionData({ type: 'essay', sampleAnswer: 42 })));
+  });
+
+  await it('CP1-A: matching/ordering/numerical — struktur sah & tidak sah', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
+      })));
+    // kurang dari 2 pasangan = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_1pair'),
+      questionData({ type: 'matching', pairs: [{ left: '1', right: 'satu' }] })));
+    // left/right kosong atau bukan map = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_blank'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: '', right: 'satu' }, { left: '2', right: 'dua' }]
+      })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_notmap'),
+      questionData({ type: 'matching', pairs: ['satu', 'dua'] })));
+
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order'),
+      questionData({ type: 'ordering', items: ['Pertama', 'Kedua', 'Ketiga'] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_1item'),
+      questionData({ type: 'ordering', items: ['Hanya satu'] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_blank'),
+      questionData({ type: 'ordering', items: ['Satu', ''] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_dup'),
+      questionData({ type: 'ordering', items: ['Sama', 'Sama'] })));
+
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num'),
+      questionData({ type: 'numerical', correctValue: 2, tolerance: 0.5 })));
+    // correctValue wajib angka; tolerance negatif = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num_str'),
+      questionData({ type: 'numerical', correctValue: '2' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num_tol_neg'),
+      questionData({ type: 'numerical', correctValue: 2, tolerance: -1 })));
+  });
+
+  await it('CP1-A: code/case_study — struktur sah & tidak sah', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code'),
+      questionData({
+        type: 'code',
+        starterCode: 'function f() {}',
+        expectedOutput: '1',
+        sampleSolution: 'function f() { return 1; }'
+      })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code_num'),
+      questionData({ type: 'code', starterCode: 123 })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code_missing'),
+      questionData({ type: 'code' })));
+
+    // subQuestions kosong sah (form belum punya editor sub-soal & grading.js
+    // memperlakukan daftar kosong sebagai soal otomatis).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case'),
+      questionData({ type: 'case_study', caseText: 'Sebuah kasus...', subQuestions: [] })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_sub'),
+      questionData({
+        type: 'case_study',
+        caseText: 'Sebuah kasus...',
+        subQuestions: [{ type: 'boolean', correctBoolean: true }]
+      })));
+    // caseText kosong / bukan string = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_empty'),
+      questionData({ type: 'case_study', caseText: '', subQuestions: [] })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_num'),
+      questionData({ type: 'case_study', caseText: 5, subQuestions: [] })));
+    // subQuestions > 10 atau elemen pertama bukan map = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_overflow'),
+      questionData({
+        type: 'case_study',
+        caseText: 'Kasus',
+        subQuestions: Array.from({ length: 11 }, () => ({ type: 'essay' }))
+      })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_badsub'),
+      questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: ['bukan-map'] })));
+  });
+
+  // ---------- CP1-A: keamanan bank soal ----------
+  await it('CP1-A: non-anggota & tamu ditolak baca/tulis/ubah/hapus soal', async () => {
+    // carol bukan anggota space1 (lihat komentar carolCP3 di blok CP3).
+    await assertFails(getDoc(doc(fsDb(carolCP3), 'spaces/space1/questions/qa_single_max')));
+    await assertFails(setDoc(doc(fsDb(carolCP3), 'spaces/space1/questions/qa_intruder'),
+      questionData({ createdBy: 'carol' })));
+    await assertFails(updateDoc(doc(fsDb(carolCP3), 'spaces/space1/questions/qa_single_max'),
+      { prompt: 'Dibajak', updatedAt: serverTimestamp() }));
+    await assertFails(deleteDoc(doc(fsDb(carolCP3), 'spaces/space1/questions/qa_single_max')));
+    // tamu tanpa login tidak boleh apa pun.
+    await assertFails(getDoc(doc(fsDb(anon), 'spaces/space1/questions/qa_single_max')));
+    await assertFails(setDoc(doc(fsDb(anon), 'spaces/space1/questions/qa_anon'),
+      questionData({ createdBy: 'anon' })));
+  });
+
+  await it('CP1-A: soal private tidak bocor ke partner; shared terbaca tapi tetap milik owner', async () => {
+    // Private: hanya owner.
+    await assertFails(getDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_single_max')));
+    await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_max')));
+    // Shared: partner boleh membaca…
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_shared_new'),
+      questionData({ visibility: 'shared' })));
+    await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new')));
+    // …tapi tidak boleh mengubah/menghapus (ownership tetap di creator).
+    await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new'),
+      { prompt: 'Dibajak', updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new'),
+      { createdBy: 'bob' }));
+    await assertFails(deleteDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new')));
+    // Owner tetap boleh mengubah & menghapus, dan createdBy/createdAt immutable.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_shared_new'),
+      { prompt: 'Soal shared diubah', updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_shared_new'),
+      { createdBy: 'bob' }));
+    await assertSucceeds(deleteDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_shared_new')));
   });
 
   // ---------- quizAttempts ----------

@@ -3,8 +3,13 @@ import Button from '../../../shared/ui/Button';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import { generateInvite } from '../services/spaceService';
+import { inviteReadiness } from '../utils/invite';
 
-export default function InviteCard({ spaceId, disabled }) {
+// Kartu "Undang partner". Tombol hanya aktif bila data ruang benar-benar siap
+// (dokumen ruang termuat & tepat 1 anggota). Sebelumnya `disabled={roles?.filled}`
+// bernilai false/undefined saat space masih null → tombol aktif, diklik, lalu
+// ditolak rules (`memberIds.size() == 1`) dan muncul "Akses ditolak…".
+export default function InviteCard({ spaceId, space, pending = false }) {
   const toast = useToast();
   const [code, setCode] = useState(null);
   const [copying, setCopying] = useState(false);
@@ -14,7 +19,11 @@ export default function InviteCard({ spaceId, disabled }) {
     setCode(null);
   }, [spaceId]);
 
+  const readiness = inviteReadiness({ spaceId, space, pending, generating });
+  const showButton = readiness.reason === 'ok' || readiness.reason === 'generating';
+
   const make = async () => {
+    if (!readiness.ready) return;
     setGenerating(true);
     try {
       const c = await generateInvite(spaceId);
@@ -46,16 +55,18 @@ export default function InviteCard({ spaceId, disabled }) {
           <div className="font-head text-[15px] text-ink">Undang partner</div>
           <div className="eyebrow mt-0.5">kode undangan sekali pakai</div>
         </div>
-        {!disabled && (
-          <Button size="sm" variant="ghost" onClick={make} loading={generating} disabled={disabled}>
+        {showButton && (
+          <Button size="sm" variant="ghost" onClick={make} loading={generating} disabled={!readiness.ready}>
             {code ? 'Buat kode baru' : 'Buat kode'}
           </Button>
         )}
       </div>
 
-      {disabled ? (
-        <p className="text-[13px] text-dim">
-          Ruang sudah penuh (2 anggota). Tidak bisa membuat undangan lagi.
+      {!showButton ? (
+        <p className="text-[13px] leading-relaxed text-dim">
+          {readiness.reason === 'full'
+            ? 'Ruang sudah penuh (2 anggota). Tidak bisa membuat undangan lagi.'
+            : 'Memuat data ruang…'}
         </p>
       ) : code ? (
         <div className="space-y-3">

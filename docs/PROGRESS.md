@@ -1,6 +1,6 @@
 # PROGRESS — Belajar Bersama
 
-Status umum tanggal **2026-09-26**: **Checkpoint 1–4, CP2.4 Resources, CP2.5 Heatmap/Riwayat, CP2.6 Chart/Badge, CP2.7 Tags & pencarian global, dan item CP7 Dashboard/Settings/Data SELESAI di kode**. BrowserRouter dipakai agar URL navigasi bersih, export JSON lokal, penghapusan materi pribadi + akun Auth, serta SECURITY.md sudah ditambahkan. **Build hijau, unit 23/23, audit dependency produksi 0 kerentanan.** Privasi notes/resources ditegakkan server-side dengan pola dual-listener. Emulator tetap persisten (`--import/--export-on-exit` via `npm run emulators`).
+Status umum tanggal **2026-09-26**: **Checkpoint 1–4, CP2.4 Resources, CP2.5 Heatmap/Riwayat, CP2.6 Chart/Badge, CP2.7 Tags & pencarian global, dan item CP7 Dashboard/Settings/Data SELESAI di kode**. BrowserRouter dipakai agar URL navigasi bersih, export JSON lokal, penghapusan materi pribadi + akun Auth, serta SECURITY.md sudah ditambahkan. **Checkpoint 1-A (rules bank soal) selesai; bug "Buat kode undangan" (permission-denied akibat clock-skew) diperbaiki.** **Build hijau, unit 41/41, tes rules 91/91, audit dependency produksi 0 kerentanan.** Privasi notes/resources ditegakkan server-side dengan pola dual-listener. Emulator tetap persisten (`--import/--export-on-exit` via `npm run emulators`).
 
 ## 1. Ringkasan status
 
@@ -10,9 +10,9 @@ Status umum tanggal **2026-09-26**: **Checkpoint 1–4, CP2.4 Resources, CP2.5 H
 | Auth email/password + verifikasi email | ✅ Selesai | verified wajib utk create/join |
 | Auth Google (produksi) | ✅ Kode siap | otomatis nonaktif saat mode emulator |
 | Space 2-user + undangan kode sekali pakai | ✅ Selesai | tanpa batch lintas-koleksi (rules emulator tak lihat tulisan batch); 2 langkah + cleanup yatim |
-| Firestore Security Rules (deny-by-default) | ✅ Selesai | 59 tes; **run terakhir 59/59 lulus** (2026-09-26) |
-| Tes aturan (59) | ✅ Lulus | 2026-09-26; regresi sinkronisasi visibility state, cek-keberadaan ruang saat create, validasi `validParent`, dan regex URL ketat |
-| Unit test utilitas murni (`test:units`) | ✅ Lulus | **23/23** (2026-09-26): navigasi, progress, privasi pencarian, utilitas pohon topik |
+| Firestore Security Rules (deny-by-default) | ✅ Selesai | 91 tes; **run terakhir 91/91 lulus** (2026-09-26) |
+| Tes aturan (91) | ✅ Lulus | 2026-09-26; 84 CP1-A (10 tipe soal, dual-listener) + 7 CP-INVITE (buat/join undangan: clock-skew, ownership, `spaceName` verbatim) |
+| Unit test utilitas murni (`test:units`) | ✅ Lulus | **41/41** (2026-09-26): navigasi, progress, privasi pencarian, pohon topik, grading, **invite (`test:invite` 7/7)** |
 | E2E privasi dua akun | ✅ Lulus | `npm run test:privacy:e2e` **37/37** (2026-09-26); termasuk dialog "Cari di ruang"; menggantikan uji manual A/B |
 | Tema "buku catatan/jurnal akademik" | ✅ Selesai | token + komponen dasar + semua layar |
 | Layout & navigasi (CP2) | ✅ Selesai | sidebar 216px, bottom-nav 7 ikon + drawer, topbar solid, semua menu + placeholder |
@@ -66,6 +66,103 @@ Catatan backlog: `noteReports` sudah menyimpan laporan pembaca secara aman, teta
 - Router menggunakan BrowserRouter agar URL bersih seperti `/roadmap`; GitHub Pages memerlukan fallback `404.html` untuk refresh deep-link.
 - `SECURITY.md` ditambahkan dengan model ancaman, kontrol Rules/App Check, konfigurasi Console, batasan Spark/no backend, penghapusan, rotasi key, dan prosedur verifikasi.
 - Verifikasi: `npm run build` ✅; `npm run test:units` ✅ 23/23; `npm audit --omit=dev --offline` ✅ 0 vulnerability. `test:rules` dan privacy E2E memerlukan emulator sesuai SOP.
+
+### 2026-09-26 — Checkpoint 1-A: rules & tes bank soal (konteks sebelum fix undangan)
+- `firestore.rules` diperluas untuk 10 tipe soal (single/multiple/boolean/short_answer/essay/matching/ordering/numerical/code/case_study). Field lama dipertahankan: `prompt`, `answerIndex`, `visibility`, `createdBy`, `createdAt/updatedAt`, `deletedAt`, `schemaVersion`.
+- Perbaikan fail-open pada multiple select: `correctIndices` kini divalidasi **semua** elemennya terhadap himpunan literal `0..(options.size()-1)` (`indicesInRange`), bukan hanya indeks 0. `subQuestions` case_study dilonggarkan ke 0..10 (form belum punya editor sub-soal; `questionService` menulis `[]`).
+- `tests/firestore.rules.test.js` ditambah: `await testEnv.clearFirestore()` sebelum seed (dokumen sisa run sebelumnya membuat 21 tes `assertSucceeds` gagal padahal rules benar) + 7 blok tes CP1-A.
+- Verifikasi: `npm run test:rules` ✅ **84/84** (2026-09-26). `firestore.rules` bagian `invites` TIDAK disentuh CP1-A.
+
+### 2026-09-26 — Perbaikan bug "Buat kode undangan" (permission-denied produksi)
+
+#### 1. Status awal
+- Gejala laporan: owner → Settings → "Undang partner" → tombol **Buat kode** → toast `⚠️ Akses ditolak. Data ini bukan untuk Anda, atau Anda belum terverifikasi.` Pesan itu adalah pemetaan generik `permission-denied` di `src/shared/utils/errors.js:26` (Firestore tidak mengirim detail kondisi rule yang gagal).
+- Hasil audit sebelumnya: operasi Firestore pertama yang gagal = `setDoc(invites/{code})` di `generateInvite()` (`src/features/space/services/spaceService.js`); `getDoc(spaces/{spaceId})` PASS.
+- Root cause masih **hipotesis**: (A) `expiresAt = new Date(Date.now() + INVITE_TTL_MS)` vs rule `expiresAt <= request.time + 24 jam` → margin nol; (B) `spaceName` di-`trim().slice(0,60)` sehingga bisa beda dari dokumen; (C) tombol memakai `disabled={roles?.filled}` yang `false` saat `space` masih `null`.
+- Kondisi workspace saat melanjutkan: perubahan CP1-A (`firestore.rules`, `tests/firestore.rules.test.js`, 84/84) **dan** sebagian fix invite (`spaceService.js`, `InviteCard.jsx`, `SettingsPage.jsx`, `src/features/space/utils/invite.js` baru, `tests/invite.test.mjs` baru, `package.json` script `test:invite`) sudah ada di working tree, belum di-commit; `docs/PROGRESS.md` belum memuat entri untuk keduanya.
+
+#### 2. Audit / verifikasi lanjutan
+- File & fungsi diperiksa: `spaceService.js` (`generateInvite`, `readAuthTokenFacts`, `joinSpaceByCode`), `src/features/space/utils/invite.js` (`resolveInviteExpiry`, `inviteSpaceName`, `inviteReadiness`, `inviteCreateErrorText`), `InviteCard.jsx`, `SettingsPage.jsx:313`, `src/lib/constants.js` (`INVITE_TTL_MS` = 24 jam, `INVITE_CODE_BYTES` = 18), `firestore.rules:925-950` (match `/invites/{code}`), `firestore.rules:936-939`.
+- **Dikonfirmasi (A) — root cause utama.** `expiresAt` dihitung dari jam perangkat, plafon rule dari jam server, margin = 0 ⇒ selisih jam apa pun (perangkat lebih cepat) membuat create deny. Emulator tidak pernah gagal karena client & server memakai jam host yang sama, plus latensi request membuat `request.time` selalu ≥ `Date.now()` saat payload dibuat. Inilah mengapa bug ini hanya muncul di produksi.
+- **Dikonfirmasi (B).** `String(space.data().name || 'Ruang Belajar').trim().slice(0, 60)` bisa berbeda dari `get(spaces).data.name` untuk dokumen yang tidak persis ≤60 karakter & ter-trim (mis. dokumen disunting di luar aplikasi) → deny pada `firestore.rules:936`.
+- **Dikonfirmasi (C).** `spaceRoles(null, uid)` mengembalikan `filled:false` (`spaceService.js:149-155`), sehingga `disabled={roles?.filled}` tidak mematikan tombol saat ruang belum termuat → klik menghasilkan deny `memberIds.size() == 1` (`firestore.rules:937`).
+- **Ditolak:** hipotesis "email verification" sebagai penyebab. Kartu undangan hanya dirender di halaman yang sudah membaca `spaces/{spaceId}`, dan rule `get` ruang juga mensyaratkan `verified()` (`firestore.rules:212`); jika klaim `email_verified` false, aplikasi sudah jatuh ke Onboarding sebelum tombol muncul.
+- **Ditolak:** mismatch schema/path payload — 10 field yang dikirim persis dengan `keys().hasAll/hasOnly` dan `validInvite` (`firestore.rules:911-931`).
+
+#### 3. Implementasi
+
+| File | Fungsi/section | Apa yang diubah | Alasan | Dampak security | Dampak behavior existing |
+|---|---|---|---|---|---|
+| `src/features/space/utils/invite.js` (baru) | `resolveInviteExpiry` | `expiresAt = serverIssuedAtMs + INVITE_TTL_MS − 5 menit` (basis waktu server); fallback `Date.now() + INVITE_TTL_MS − 1 jam` bila basis server tidak ada | Memindahkan acuan waktu dari jam perangkat ke jam server + memberi margin clock-skew; lihat verifikasi matematis di bagian 4 | Tidak ada pelemahan — plafon 24 jam rule tetap terpenuhi (malah selalu < plafon) | Umur invite efektif ≈23j55m (server) / ≈23j (fallback); "24 jam" tetap terpenuhi sebagai **batas maksimum** |
+| idem | `inviteSpaceName` | Validasi tipe/panjang **tanpa** `trim`/`slice`; nilai dikirim verbatim | Rule membandingkan kesamaan persis dengan dokumen ruang (`firestore.rules:936`) | Tidak ada perubahan (validasi lokal saja) | Nama ruang persis dari dokumen; bila di luar batas 60 → ditolak lokal dengan pesan jelas, bukan deny misterius |
+| idem | `inviteReadiness` | Guard kesiapan: `generating` / `!spaceId` / `space null` / `pending` / `memberIds 0` / `memberIds >= 2` → tidak siap | Menggantikan `roles?.filled` yang `false` saat data belum ada | Tidak ada (mencegah tulis ilegal, justru memperketat UX terhadap syarat rules) | Tombol "Buat kode" tidak muncul saat ruang belum termuat; teks "Memuat data ruang…" tampil |
+| idem | `inviteCreateErrorText` | Peta `permission-denied` → pesan langkah konkret (verifikasi email, ruang 1 anggota, muat ulang) tanpa menyebut nama rule/field | Pesan generik `errors.js:26` tidak bisa ditindaklanjuti pengguna | Tidak ada (hanya teks) | Toast spesifik untuk kegagalan create invite |
+| `src/features/space/services/spaceService.js` | `readAuthTokenFacts` (baru) | Baca `issuedAtTime`/`iat` ID token (waktu server) + klaim `email_verified` | Menyediakan basis waktu server & meniru persis cek `verified()` rules | Tidak ada (membaca token, bukan melewati verifikasi) | Satu panggilan `getIdTokenResult()` (berasal dari cache token) sebelum create |
+| idem | `generateInvite` | Pre-check lokal: `spaceId` kosong, email terverifikasi, ruang ada, **anggota** & **tepat 1 anggota**, nama valid; `expiresAt` dari helper; `spaceName` verbatim; `permission-denied` dipetakan ke pesan spesifik | Supaya setiap kondisi yang bisa diketahui lokal menghasilkan pesan yang benar, bukan "Akses ditolak" | **Tidak melemahkan security**: rule tetap mengecek ulang `verified()`, `isMemberOf`, `createdBy == uid`, `used == false`, `memberIds.size() == 1`, kesamaan `spaceName`, dan jendela 24 jam — pre-check lokal hanya menambah lapisan penjelasan | Path `invites/{code}` & 10 field schema **tidak berubah**; error lokal muncul lebih awal |
+| `src/features/space/components/InviteCard.jsx` | prop & render | Prop `disabled` diganti `space` + `pending`; `showButton` hanya untuk `ok`/`generating`; guard `if (!readiness.ready) return` | Tombol tidak boleh bisa ditekan sebelum data siap (Langkah 3) | Tidak ada perubahan aturan; hanya menghindari permintaan yang pasti ditolak | Saat penuh → pesan "Ruang sudah penuh"; saat loading → "Memuat data ruang…"; saat generating → spinner |
+| `src/features/settings/components/SettingsPage.jsx` | `SettingsPage` | `<InviteCard spaceId={spaceId} space={space} pending={pending} />` (menggantikan `disabled={roles?.filled}`) | `roles` tidak boleh menjadi sumber kesiapan karena `null`-nya ambigu | Tidak ada | Tidak ada perubahan tampilan lain; `roles` tetap dipakai untuk daftar anggota |
+| `tests/invite.test.mjs` (baru) | 7 unit test | Uji `resolveInviteExpiry`, `inviteSpaceName`, `inviteReadiness`, `inviteCreateErrorText` | Regression test fix (bukti non-vakum) | — | — |
+| `tests/firestore.rules.test.js` | seed + 7 blok `CP-INVITE` | Seed `space_unik` (nama berspasi ganda), `space_panjang` (nama 75 karakter), `space_penuh` (2 anggota), `users/hana`, `users/ivan`; 7 blok tes baru | Menutupi 12 skenario wajib tanpa menghapus satu pun tes lama | Memperkuat: deny-case baru untuk ownership/size/expiry/path | Seed bertambah saja; urutan & isi tes lama tidak berubah |
+| `package.json` | scripts | `test:invite` baru; `test:units` menyertakan `tests/invite.test.mjs` | Agar unit test ikut suite baku | — | — |
+
+#### 4. Verifikasi matematis `resolveInviteExpiry`
+Plafon rule (`firestore.rules:938-939`): `expiresAt > request.time` DAN `expiresAt <= request.time + 24 jam`.
+- **Cabang server:** `expiresAt = issuedAt + 24h − 5m`. Karena `issuedAt ≤ serverNow` (token selalu diterbitkan di masa lalu), `expiresAt ≤ serverNow + 24h − 5m` ⇒ lolos plafon **dengan margin 5 menit** walau jam server Auth & Firestore berbeda. Token Auth berumur ≤ 1 jam (refresh otomatis) ⇒ `issuedAt ≥ serverNow − 1h` ⇒ `expiresAt ≥ serverNow + 22h55m > serverNow` ⇒ **tidak pernah langsung expired**.
+- **Cabang fallback:** `expiresAt = deviceNow + 24h − 1h`. Plafon terpenuhi selama perangkat tidak lebih cepat dari server > 1 jam (skew nyata perangkat biasanya ratusan ms–detik) ⇒ aman; batas bawah `deviceNow + 23h > serverNow` selama perangkat tidak lebih lambat > 23 jam.
+- **TTL produk:** `INVITE_TTL_MS = 24 jam` tidak diubah; 24 jam tetap dipenuhi sebagai **batas maksimum** rule, dengan masa berlaku efektif 23j55m (basis server) / 23j (fallback) — trade-off terdokumentasi di komentar `invite.js`.
+- **Emulator vs produksi:** di emulator client & server memakai jam host yang sama dan `request.time` direkam setelah latensi jaringan sehingga payload lama selalu lolos; di produksi `request.time` berasal dari jam Google dan `Date.now()` dari jam perangkat yang tidak disinkronkan ⇒ payload lama deny.
+
+#### 5. Testing (jalankan, hasil nyata)
+| Command | Tujuan | Hasil |
+|---|---|---|
+| `node --test tests/invite.test.mjs` | Uji helper baru | ✅ **7/7** |
+| mutasi: `INVITE_SERVER_MARGIN_MS = 0` & `INVITE_CLIENT_MARGIN_MS = 0`, lalu dijalankan ulang | Membuktikan unit test **bukan vakum** (margin 0 = bug lama) | ❌ **5 pass / 2 fail** (expected) → nilai margin dikembalikan (5 menit / 1 jam) |
+| `node tests/firestore.rules.test.js` (iterasi 1, emulator berjalan) | Regression rules setelah fix + 7 blok baru | ✅ **ALL 91 TESTS PASSED** |
+| `node tests/firestore.rules.test.js` (iterasi 2, setelah tambah kasus isolasi `penuh_anggota`) | Memastikan kasus isolasi `memberIds.size() == 1` lulus | ✅ **ALL 91 TESTS PASSED** |
+| `npm run test:invite` | Suite baku unit invite | ✅ **7 tests, 7 pass, 0 fail** |
+| `npm run test:units` | Seluruh unit (navigasi, progress, privasi, topik, grading, invite) | ✅ **41 tests, 41 pass, 0 fail** (34 lama + 7 baru) |
+| `npm run test:rules` (`emulators:exec`, exit code 0) | Verifikasi resmi seluruh rules | ✅ **ALL 91 TESTS PASSED** + `Script exited successfully (code 0)`; `[FAIL]` = 0; `[OK]` = 91 |
+| `npm run build` | Build produksi | ✅ **built in 6.61s** + `postbuild` → `dist/404.html`; **0 error** |
+
+Catatan iterasi: tidak ada test gagal yang perlu diperbaiki pada fix ini — semua iterasi lulus; satu-satunya kegagalan terencana adalah run mutasi (2 fail) yang justru membuktikan test mendeteksi hilangnya margin. Run sebelumnya yang menunjukkan 21/77 gagal pada CP1-A disebabkan dokumen sisa emulator (sudah diperbaiki `clearFirestore()`), bukan rules.
+
+#### 6. Regression test (12 skenario wajib → tes nyata)
+| # | Skenario | Tes |
+|---|---|---|
+| 1 | Owner valid + 1 member + expiry valid → ALLOW | `CP-INVITE: owner ruang 1 anggota boleh membuat invite (nama ruang apa adanya)` ✅; unit `kedaluwarsa memakai basis waktu server…` ✅ |
+| 2 | Clock-skew realistis tidak gagal | `CP-INVITE: expiresAt dari jam perangkat yang lebih cepat dari server ditolak; payload bermargin lolos` — perilaku lama (+1 menit) **DENY**, payload server (−5 menit) **ALLOW**, fallback (−60 menit) **ALLOW**; unit matrix skew 0/1s/5m/55m ✅ |
+| 3 | Ruang 2 anggota → DENY | `CP-INVITE: ruang penuh / non-member / anonim…` — `space_penuh` (zoe) DENY **+ isolasi** alice (anggota `space1`, semua syarat lain cocok) DENY → satu-satunya penolak `memberIds.size() == 1` ✅ |
+| 4 | Non-member → DENY | idem — carol pada `space_unik` DENY ✅ |
+| 5 | Anonymous → DENY | idem — `anon` DENY ✅ |
+| 6 | `createdBy` = owner | `CP-INVITE: createdBy harus pembuatnya & invite tidak boleh dibuat sudah terpakai` — `createdBy: 'ivan'` DENY ✅ |
+| 7 | `used = false` saat dibuat | idem — `used: true` (+`usedBy`/`usedAt`) DENY ✅ |
+| 8 | Dokumen tetap di `invites/{code}` | `CP-INVITE: dokumen invite wajib berada di invites/{code} yang cocok` — `code` ≠ id dokumen DENY ✅ |
+| 9 | `spaceName` tidak mismatch karena transformasi | `CP-INVITE: nama ruang harus sama persis dengan dokumen ruang` — versi "dirapikan" & "dipotong" DENY, nama 75 karakter DENY (verbatim & terpotong); unit `nama ruang dikirim apa adanya` ✅ |
+| 10 | `space` null/loading → disabled | unit `kesiapan tombol…`: `space:null`, `space:undefined`, `memberIds:[]`, `spaceId:null` → `ready:false` ✅ |
+| 11 | `pending`/generating → disabled | unit idem: `pending:true` → `loading`; `generating:true` → `generating` ✅ |
+| 12 | Alur join tetap bekerja | `CP-INVITE: invite yang baru dibuat tetap bisa dipakai join (regresi)` — create ALLOW, batch join (memberIds + `_joinCode` + `used=true`) ALLOW, profil partner tertaat, replay DENY ✅; tes join lama (dave/frank/grace) tetap lulus |
+
+Tidak ada tes lama yang dihapus: 91 = 84 (CP1-A) + 7 blok baru.
+
+#### 7. Firestore Rules — DIPERTAHANKAN (tidak diubah)
+- **`firestore.rules` TIDAK diubah untuk fix ini.** Bukti: `git diff --numstat -- firestore.rules` = `164 11` dan **0 baris** perubahan yang menyentuh `invite`/`expiresAt` — seluruh diff berasal dari CP1-A (bagian `questions`). Plafon 24 jam, `verified()`, `isMemberOf`, `createdBy == uid`, `used == false`, kesamaan `spaceName`, `memberIds.size() == 1`, `code == id dokumen`, dan `allow delete: if false` tetap persis seperti semula.
+- `INVITE_TTL_MS` di `src/lib/constants.js` juga tetap **24 jam** (tidak diturunkan jadi 23 jam); margin ditempatkan sebagai pengurang kecil di helper client sehingga selalu `expiresAt < request.time + 24h`.
+- Sebelum: `test:rules` 84/84 (CP1-A) → Sesudah: **91/91** (84 CP1-A tidak berubah + 7 blok CP-INVITE).
+
+#### 8. Build / verifikasi lain / konfigurasi produksi
+- `npm run build` ✅ **PASS** (6.61s, 0 error) + `postbuild` membuat `dist/404.html`. Warning `Some chunks are larger than 500 kB` (bundle ≈1.295 kB) **pre-existing** — muncul juga pada build CP1-A dan build sebelumnya, bukan akibat perubahan fix ini.
+- Konfigurasi diperiksa (tanpa perubahan): `.firebaserc` alias `belajar-bersama` → `belajar-bersama-prod`; `.env.production.local` → `VITE_FIREBASE_PROJECT_ID=belajar-bersama-prod`, `VITE_USE_EMULATORS=false` (konsisten). `.github/workflows/deploy-pages.yml` hanya build + deploy GitHub Pages, **tidak** men-deploy `firestore.rules`.
+- Karena rules tidak diubah, **deploy rules TIDAK diperlukan** untuk fix ini; yang perlu di-deploy hanya frontend (GitHub Pages) setelah commit. Pemeriksaan rules produksi vs repo tetap disarankan untuk perubahan rules berikutnya (`firebase deploy --only firestore:rules --project belajar-bersama-prod`) — itu pekerjaan ops, bukan bagian fix.
+- `npm run test:privacy:e2e` **belum dijalankan** (butuh dev server + headless Chrome + emulator persisten berjalan); dicatat sebagai sisa verifikasi.
+
+#### 9. Final status
+- **Root cause final:** `generateInvite()` menghitung `expiresAt` dari **jam perangkat** persis sebesar plafon rule (`request.time + 24 jam`) → margin nol → deny `permission-denied` di perangkat yang jamnya lebih cepat dari jam server (hanya terlihat di produksi, tidak pernah di emulator). Diperkuat oleh dua cacat sekunder: `spaceName` ditransformasi di client (rawan beda dari dokumen) dan tombol aktif saat `space` masih `null` (menyebabkan deny `memberIds.size() == 1`).
+- **File diubah (fix invite):** `src/features/space/utils/invite.js` (baru), `src/features/space/services/spaceService.js`, `src/features/space/components/InviteCard.jsx`, `src/features/settings/components/SettingsPage.jsx`, `tests/invite.test.mjs` (baru), `tests/firestore.rules.test.js` (seed + 7 blok), `package.json` (script), `docs/PROGRESS.md` (entri ini).
+- **File TIDAK diubah:** `firestore.rules`, `src/lib/constants.js` (TTL tetap 24 jam), `src/app/router.jsx`, `src/app/layout/navConfig.js`, Question Bank / `src/features/questions/**`, `grading.js`, `quiz`, semua konfigurasi deploy.
+- **Hasil test:** `test:invite` 7/7 ✅ · `test:units` 41/41 ✅ · `test:rules` **91/91** ✅ (exit 0, `[FAIL]` 0) · mutasi margin→0 terdeteksi 2 fail (bukti non-vakum, sudah dikembalikan) · `npm run build` ✅.
+- **Status CP1-A:** aman — 84 tes CP1-A tetap lulus utuh dalam run 91/91 dan tidak ada rules questions yang disentuh.
+- **Status fix invite (kode):** selesai di kode + unit + rules; **verifikasi produksi BELUM dilakukan** (environment ini tidak punya akses browser/device produksi). Belum dapat mengklaim "fixed di produksi" hanya berdasarkan emulator.
+- **Sisa:** (1) uji manual di produksi setelah deploy: owner → Settings → Buat kode → kode tampil, dan partner → masukkan kode → `memberIds` bertambah → `users/{partnerUid}.spaceId` terisi → SpaceGate lolos; (2) `npm run test:privacy:e2e`; (3) commit (tidak dilakukan sesuai aturan AGENTS.md kecuali diminta).
 
 ## 2. Riwayat pekerjaan
 

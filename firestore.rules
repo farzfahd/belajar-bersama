@@ -539,27 +539,180 @@ service cloud.firestore {
     }
 
     // ---------- questions (bank soal, untuk Questions & Quiz) ----------
-    // TEPAT 4 pilihan (pilihan ganda). Alasannya aturan bahasa rules tidak
-    // punya loop untuk memvalidasi tiap elemen list, jadi jumlah opsi dikunci
-    // agar indeks 0..3 bisa diperiksa satu per satu. UI wajib mengikuti.
-    function validQuestion(spaceId, d) {
-      return d.prompt is string && d.prompt.size() > 0 && d.prompt.size() <= 2000
-        && d.options is list && d.options.size() == 4
+    // Satu dokumen = satu soal. Field dasar semua tipe (nama field lama
+    // DIPERTAHANKAN apa adanya: prompt, visibility, createdBy, createdAt,
+    // updatedAt, deletedAt, schemaVersion; kunci pilihan ganda tetap
+    // `answerIndex`, bukan correctIndex):
+    //   prompt, type, topicId, difficulty, visibility, tags, explanation,
+    //   points, timeLimitSeconds, attachmentUrl, relatedNoteId,
+    //   relatedResourceId, hasAnswerKey, commentCount, deletedAt,
+    //   createdBy, createdAt, updatedAt, schemaVersion.
+    // Kunci jawaban per tipe (structural saja — grading TIDAK di rules):
+    //   single       options 2..20 unik (string) + answerIndex dalam rentang
+    //   multiple     options 2..20 unik (string) + correctIndices 1..size
+    //                (int, unik, SEMUA dalam rentang options)
+    //   boolean      correctBoolean (bool)
+    //   short_answer acceptedAnswers 1..20 (string)
+    //   essay        sampleAnswer opsional (string <= 5000)
+    //   matching     pairs 2..20 ({left, right} string)
+    //   ordering     items 2..20 unik (string)
+    //   numerical    correctValue int|float + tolerance opsional >= 0
+    //   code         starterCode (string) + expectedOutput/sampleSolution opsional
+    //   case_study   caseText + subQuestions 0..10 (map)
+    // `type` boleh tidak ada pada data lama → dianggap 'single'.
+    //
+    // BATAS BAHASA RULES (tidak ada loop/iterasi atas elemen list):
+    //   - Elemen list hanya bisa diperiksa per-indeks. Karena itu opsi/list
+    //     diperiksa pada indeks 0 & 1; sisanya dijaga lewat jumlah (2..20)
+    //     dan keunikan (toSet().size() == size()). Validasi tiap elemen
+    //     selebihnya WAJIB di service/UI (questionService.js +
+    //     QuestionFormModal.jsx sudah: trim, tolak kosong, tolak duplikat).
+    //   - PENGECUALIAN: rentang correctIndices bisa ditegakkan penuh lewat
+    //     perbandingan himpunan (indicesInRange) karena jumlah opsi dibatasi
+    //     2..20, sehingga himpunan indeks sah 0..(size-1) bisa ditulis
+    //     sebagai literal. Ini menutup celah kunci jawaban menunjuk opsi
+    //     yang tidak ada (mis. [0, 99]).
+    //   - Nilai NaN/Infinity tidak bisa diperiksa di rules; hanya tipe
+    //     angka (int/float) yang dicek.
+    function optionListOk(d) {
+      return d.options is list
+        && d.options.size() >= 2 && d.options.size() <= 20
+        && d.options.toSet().size() == d.options.size()
         && d.options[0] is string && d.options[0].size() > 0 && d.options[0].size() <= 300
-        && d.options[1] is string && d.options[1].size() > 0 && d.options[1].size() <= 300
-        && d.options[2] is string && d.options[2].size() > 0 && d.options[2].size() <= 300
-        && d.options[3] is string && d.options[3].size() > 0 && d.options[3].size() <= 300
-        && d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex <= 3
+        && d.options[1] is string && d.options[1].size() > 0 && d.options[1].size() <= 300;
+    }
+
+    // Himpunan literal 0..(n-1) untuk n = 2..20 (batas jumlah opsi).
+    // Dipakai agar SEMUA elemen correctIndices terbukti menunjuk opsi yang
+    // ada, sekaligus menolak elemen non-int. list.hasOnly(list) = semua
+    // elemen list pertama ada di list pembanding.
+    function indicesInRange(n, idx) {
+      return (n == 2 && idx.hasOnly([0, 1]))
+        || (n == 3 && idx.hasOnly([0, 1, 2]))
+        || (n == 4 && idx.hasOnly([0, 1, 2, 3]))
+        || (n == 5 && idx.hasOnly([0, 1, 2, 3, 4]))
+        || (n == 6 && idx.hasOnly([0, 1, 2, 3, 4, 5]))
+        || (n == 7 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6]))
+        || (n == 8 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7]))
+        || (n == 9 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8]))
+        || (n == 10 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+        || (n == 11 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+        || (n == 12 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]))
+        || (n == 13 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))
+        || (n == 14 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]))
+        || (n == 15 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]))
+        || (n == 16 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]))
+        || (n == 17 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]))
+        || (n == 18 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]))
+        || (n == 19 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]))
+        || (n == 20 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]));
+    }
+
+    function validSingleChoice(d) {
+      return optionListOk(d)
+        && d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex < d.options.size();
+    }
+
+    function validMultipleChoice(d) {
+      return optionListOk(d)
+        && d.correctIndices is list
+        && d.correctIndices.size() >= 1 && d.correctIndices.size() <= d.options.size()
+        && d.correctIndices.toSet().size() == d.correctIndices.size()
+        && indicesInRange(d.options.size(), d.correctIndices);
+    }
+
+    function validBooleanChoice(d) {
+      return d.correctBoolean is bool;
+    }
+
+    function validShortAnswer(d) {
+      return d.acceptedAnswers is list
+        && d.acceptedAnswers.size() >= 1 && d.acceptedAnswers.size() <= 20
+        && d.acceptedAnswers[0] is string
+        && d.acceptedAnswers[0].size() > 0 && d.acceptedAnswers[0].size() <= 300;
+    }
+
+    function validEssay(d) {
+      return !('sampleAnswer' in d) || (d.sampleAnswer is string && d.sampleAnswer.size() <= 5000);
+    }
+
+    // Satu pasangan wajib map dengan left/right string tidak kosong.
+    // Hanya bisa dipanggil untuk indeks yang ada (rules tidak iterasi).
+    function validMatchingPair(p) {
+      return p is map
+        && p.left is string && p.left.size() > 0 && p.left.size() <= 300
+        && p.right is string && p.right.size() > 0 && p.right.size() <= 300;
+    }
+
+    function validMatching(d) {
+      return d.pairs is list && d.pairs.size() >= 2 && d.pairs.size() <= 20
+        && validMatchingPair(d.pairs[0])
+        && validMatchingPair(d.pairs[1]);
+    }
+
+    function validOrdering(d) {
+      return d.items is list && d.items.size() >= 2 && d.items.size() <= 20
+        && d.items.toSet().size() == d.items.size()
+        && d.items[0] is string && d.items[0].size() > 0 && d.items[0].size() <= 300
+        && d.items[1] is string && d.items[1].size() > 0 && d.items[1].size() <= 300;
+    }
+
+    function validNumerical(d) {
+      return (d.correctValue is int || d.correctValue is float)
+        && (!('tolerance' in d)
+            || ((d.tolerance is int || d.tolerance is float) && d.tolerance >= 0));
+    }
+
+    function validCodeQuestion(d) {
+      return d.starterCode is string && d.starterCode.size() <= 10000
+        && (!('expectedOutput' in d) || (d.expectedOutput is string && d.expectedOutput.size() <= 5000))
+        && (!('sampleSolution' in d) || (d.sampleSolution is string && d.sampleSolution.size() <= 10000));
+    }
+
+    // subQuestions boleh KOSONG: form soal belum punya editor sub-soal
+    // (QuestionFormModal hanya mengirim caseText) sehingga questionService
+    // menulis [], dan grading.js memang memperlakukan daftar kosong sebagai
+    // soal yang dinilai otomatis. Elemen pertama wajib map bila ada
+    // (rules hanya bisa memeriksa indeks 0).
+    function validCaseStudy(d) {
+      return d.caseText is string && d.caseText.size() > 0 && d.caseText.size() <= 10000
+        && d.subQuestions is list && d.subQuestions.size() <= 10
+        && (d.subQuestions.size() == 0 || d.subQuestions[0] is map);
+    }
+
+    function validQuestionTypeSpecific(d) {
+      let t = ('type' in d) ? d.type : 'single';
+      return (t == 'single' && validSingleChoice(d))
+        || (t == 'multiple' && validMultipleChoice(d))
+        || (t == 'boolean' && validBooleanChoice(d))
+        || (t == 'short_answer' && validShortAnswer(d))
+        || (t == 'essay' && validEssay(d))
+        || (t == 'matching' && validMatching(d))
+        || (t == 'ordering' && validOrdering(d))
+        || (t == 'numerical' && validNumerical(d))
+        || (t == 'code' && validCodeQuestion(d))
+        || (t == 'case_study' && validCaseStudy(d));
+    }
+
+    function validQuestion(spaceId, d) {
+      return d.prompt is string && d.prompt.size() > 0 && d.prompt.size() <= 5000
         && d.topicId is string && d.topicId.size() > 0
         && topicExistsOrEmpty(spaceId, d.topicId)
         && d.difficulty in ['beginner', 'intermediate', 'advanced']
         && d.visibility in ['private', 'shared']
         && validTags(d.tags)
         && (!('explanation' in d) || (d.explanation is string && d.explanation.size() <= 2000))
+        && (!('points' in d) || (d.points is int && d.points >= 1 && d.points <= 100))
+        && (!('timeLimitSeconds' in d) || (d.timeLimitSeconds is int && d.timeLimitSeconds >= 0 && d.timeLimitSeconds <= 7200))
+        && (!('attachmentUrl' in d) || d.attachmentUrl == '' || (d.attachmentUrl is string && d.attachmentUrl.matches('(?i)^https?://[A-Za-z0-9._~%][^\\s]*$')))
+        && (!('relatedNoteId' in d) || (d.relatedNoteId is string && d.relatedNoteId.size() <= 100))
+        && (!('relatedResourceId' in d) || (d.relatedResourceId is string && d.relatedResourceId.size() <= 100))
+        && (!('hasAnswerKey' in d) || d.hasAnswerKey is bool)
         && d.commentCount is int && d.commentCount == 0
         && (!('deletedAt' in d) || d.deletedAt == null || d.deletedAt is timestamp)
         && 'createdAt' in d && 'updatedAt' in d
-        && d.schemaVersion == 1;
+        && d.schemaVersion == 1
+        && validQuestionTypeSpecific(d);
     }
 
     function questionVisibleTo(q, uid) {

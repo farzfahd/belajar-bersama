@@ -19,6 +19,7 @@ import TopicDetailPage from '../features/topics/components/TopicDetailPage';
 import SettingsPage from '../features/settings/components/SettingsPage';
 import ProgressPage from '../features/progress/components/ProgressPage';
 import AchievementsPage from '../features/progress/components/AchievementsPage';
+import QuestionBankPage from '../features/questions/components/QuestionBankPage';
 import { NAV } from './layout/navConfig';
 import SplashScreen from '../shared/components/SplashScreen';
 import { toErrorMessage } from '../shared/utils/errors';
@@ -100,6 +101,7 @@ export default function AppRoutes() {
               <Route path="/notes/:noteId" element={<NoteEditorPage />} />
               <Route path="/roadmap" element={<RoadmapPage />} />
               <Route path="/roadmap/:topicId" element={<TopicDetailPage />} />
+              <Route path="/questions" element={<QuestionBankPage />} />
               <Route path="/progress" element={<ProgressPage />} />
               <Route path="/achievements" element={<AchievementsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

@@ -310,7 +310,7 @@ export default function SettingsPage() {
           )}
         </div>
 
-        <InviteCard spaceId={spaceId} disabled={roles?.filled} />
+        <InviteCard spaceId={spaceId} space={space} pending={pending} />
 
         {space?.createdAt && (
           <p className="font-mono text-[10.5px] uppercase tracking-[.06em] text-dimmer">

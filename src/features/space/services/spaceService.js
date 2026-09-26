@@ -7,7 +7,12 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
-import { INVITE_CODE_BYTES, INVITE_TTL_MS, ROOT, SCHEMA_VERSION } from '../../../lib/constants';
+import { INVITE_CODE_BYTES, ROOT, SCHEMA_VERSION } from '../../../lib/constants';
+import {
+  inviteCreateErrorText,
+  inviteSpaceName,
+  resolveInviteExpiry
+} from '../utils/invite';
 import { ensureProfile } from '../../auth/services/authService';
 
 function requireUser() {
@@ -74,25 +79,81 @@ export async function renameSpace(spaceId, name) {
   await updateDoc(doc(db, ROOT.spaces, spaceId), { name: value });
 }
 
+// Fakta dari ID token Auth (server, bukan jam perangkat):
+// - `issuedAtTime`/`iat` = waktu server Google menerbitkan token → basis aman
+//   untuk menghitung expiresAt invite (lihat src/features/space/utils/invite.js).
+// - klaim `email_verified` = nilai yang SAMA dengan yang diperiksa rules
+//   (`verified()`), jadi cek lokal di sini setara dengan yang akan terjadi di
+//   server — bukan pengganti, hanya pesan lebih awal & lebih jelas.
+async function readAuthTokenFacts() {
+  const user = auth.currentUser;
+  try {
+    const token = await user.getIdTokenResult();
+    const claims = token.claims || {};
+    const fromIso = Date.parse(token.issuedAtTime || '');
+    const fromClaim = Number(claims.iat) * 1000;
+    const issuedAtMs = Number.isFinite(fromIso) ? fromIso : (Number.isFinite(fromClaim) ? fromClaim : null);
+    return { issuedAtMs, emailVerified: claims.email_verified === true };
+  } catch {
+    return { issuedAtMs: null, emailVerified: user?.emailVerified === true };
+  }
+}
+
 // Kode acak kriptografis >= 20 karakter sebagai document ID invites/{code}.
+// Path & schema TIDAK berubah; hanya nilai expiresAt yang kini berbasis waktu
+// server + margin clock-skew, dan spaceName dikirim apa adanya dari dokumen.
 export async function generateInvite(spaceId) {
   const uid = requireUser();
-  const code = randomInviteCode();
+  if (!spaceId) throw new Error('Ruang belajar belum siap. Muat ulang halaman lalu coba lagi.');
+
+  const { issuedAtMs, emailVerified } = await readAuthTokenFacts();
+  if (!emailVerified) {
+    throw new Error('Verifikasi email dulu sebelum mengundang partner. Buka tautan verifikasi di email, lalu muat ulang halaman ini.');
+  }
+
   const spaceRef = doc(db, ROOT.spaces, spaceId);
   const space = await getDoc(spaceRef);
   if (!space.exists()) throw new Error('Ruang belajar tidak ditemukan.');
-  await setDoc(doc(db, ROOT.invites, code), {
-    code,
-    spaceId,
-    spaceName: String(space.data().name || 'Ruang Belajar').trim().slice(0, 60),
-    createdBy: uid,
-    createdAt: serverTimestamp(),
-    expiresAt: new Date(Date.now() + INVITE_TTL_MS),
-    used: false,
-    usedBy: null,
-    usedAt: null,
-    schemaVersion: SCHEMA_VERSION
-  });
+
+  const spaceData = space.data() || {};
+  const memberIds = Array.isArray(spaceData.memberIds) ? spaceData.memberIds : [];
+  if (!memberIds.includes(uid)) throw new Error('Kamu bukan anggota ruang ini.');
+  // Rule mensyaratkan tepat 1 anggota (firestore.rules:937). Cek lokal supaya
+  // tidak berakhir jadi "Akses ditolak" tanpa penjelasan.
+  if (memberIds.length >= 2) {
+    throw new Error('Ruang ini sudah berisi 2 anggota, jadi kode undangan tidak diperlukan lagi.');
+  }
+
+  const nameCheck = inviteSpaceName(spaceData.name);
+  if (!nameCheck.ok) {
+    throw new Error(
+      nameCheck.reason === 'too-long'
+        ? 'Nama ruang terlalu panjang (maksimal 60 karakter). Pendekkan nama ruang lalu coba lagi.'
+        : 'Nama ruang belum diisi. Isi nama ruang lalu coba lagi.'
+    );
+  }
+
+  const { expiresAt } = resolveInviteExpiry({ serverIssuedAtMs: issuedAtMs, clientNowMs: Date.now() });
+
+  const code = randomInviteCode();
+  try {
+    await setDoc(doc(db, ROOT.invites, code), {
+      code,
+      spaceId,
+      spaceName: nameCheck.value,
+      createdBy: uid,
+      createdAt: serverTimestamp(),
+      expiresAt,
+      used: false,
+      usedBy: null,
+      usedAt: null,
+      schemaVersion: SCHEMA_VERSION
+    });
+  } catch (err) {
+    const friendly = inviteCreateErrorText(err?.code);
+    if (friendly) throw new Error(friendly);
+    throw err;
+  }
   return code;
 }
 
