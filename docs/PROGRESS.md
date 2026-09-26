@@ -34,8 +34,12 @@ Catatan backlog: `noteReports` sudah menyimpan laporan pembaca secara aman, teta
 - Audit konfigurasi produksi menemukan `.env.production.local` terisi dan `VITE_USE_EMULATORS=false`; nilai lokal tetap tidak dilacak Git.
 - App Check Enterprise, CSP reCAPTCHA, dan validasi konfigurasi Firebase diperketat; konfigurasi inti yang tidak lengkap sekarang tidak dianggap siap produksi.
 - Workflow `.github/workflows/deploy-pages.yml` ditambahkan untuk build/deploy GitHub Pages menggunakan GitHub Repository Variables.
+- Runtime workflow memakai Node.js 24 agar sesuai dengan dependency Google Cloud terbaru pada runner GitHub Actions.
 - Folder export emulator lokal (`firebase-export-*/`) ditambahkan ke `.gitignore` agar data akun/data uji tidak ikut ter-upload.
 - Verifikasi: `npm run build` ✅, `npm run test:units` ✅ 23/23, `npm run test:rules` ✅ 77/77, `npm audit --omit=dev --offline` ✅ 0 kerentanan.
+
+### 2026-09-26 — Routing GitHub Pages
+- `BrowserRouter` kini menerima `VITE_ROUTER_BASENAME`; workflow GitHub Pages mengisinya dengan `/belajar-bersama` agar navigasi dan redirect mempertahankan subpath repository.
 
 ### 2026-09-26 — Migrasi App Check ke reCAPTCHA Enterprise
 - Provider App Check produksi di `src/lib/firebase.js` diubah dari `ReCaptchaV3Provider` ke `ReCaptchaEnterpriseProvider`.

@@ -77,12 +77,16 @@ function SpaceGate() {
 }
 
 export default function AppRoutes() {
+  // GitHub Pages project site memakai subpath repo, sedangkan localhost dan
+  // Firebase Hosting memakai root. Nilai ini diisi workflow deploy bila perlu.
+  const basename = import.meta.env.VITE_ROUTER_BASENAME || '/';
+
   return (
     // BrowserRouter membuat URL bersih tanpa tanda hash.
     // "/" dan "/login" publik: landing page + layar masuk/daftar. Wajib didefinisikan
     // di atas route ber-`Gate` (pathless) agar pengunjung yang belum masuk tidak
     // dialihkan ke landing.
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<AuthScreen />} />
