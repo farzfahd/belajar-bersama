@@ -13,6 +13,7 @@ import {
   inviteSpaceName,
   resolveInviteExpiry
 } from '../utils/invite';
+import { nextMemberIds } from '../utils/leave';
 import { ensureProfile } from '../../auth/services/authService';
 
 function requireUser() {
@@ -39,10 +40,14 @@ async function recoverSpaceLink(uid, profile) {
   const spaceRef = doc(db, ROOT.spaces, profile.spaceId);
   const snap = await getDoc(spaceRef);
   if (snap.exists()) {
-    if (!(snap.data().memberIds || []).includes(uid)) {
-      throw new Error('Profil tertaut ke ruang yang tidak bisa diakses.');
-    }
-    return profile;
+    const memberIds = Array.isArray(snap.data().memberIds) ? snap.data().memberIds : [];
+    if (memberIds.includes(uid)) return profile;
+    // Keanggotaan sudah dicabut (mis. partner keluar, atau leave yang terputus)
+    // tetapi profil belum ter-reset: lepas tautan sendiri agar user tidak
+    // terkunci — aturan users mengizinkan melepas tautan hanya ketika sudah
+    // bukan anggota, jadi ini murni pemulihan, bukan jalan pintas.
+    await updateDoc(doc(db, ROOT.users, uid), { spaceId: null });
+    return { ...profile, spaceId: null };
   }
   await updateDoc(doc(db, ROOT.users, uid), { spaceId: null });
   return { ...profile, spaceId: null };
@@ -204,6 +209,65 @@ export async function joinSpaceByCode(input) {
   }
   await updateDoc(doc(db, ROOT.users, uid), { spaceId });
   return spaceId;
+}
+
+// Keluar dari ruang belajar (CP0) — HANYA partner (memberIds indeks 1).
+// Satu writeBatch ATOMIK:
+//   1. spaces/{id}.memberIds : [owner, partner] -> [owner] (ruang TIDAK dihapus)
+//   2. users/{uid}.spaceId   -> null
+// Rules memverifikasi bentuk array secara independen (partnerLeaveOk),
+// sehingga client tidak pernah dipercaya. Idempoten: bila sudah bukan anggota
+// (tab kedua / retry jaringan), cukup rapikan tautan profil.
+export async function leaveSpace(spaceId) {
+  const uid = requireUser();
+  if (!spaceId) throw new Error('Ruang belajar belum siap. Muat ulang halaman lalu coba lagi.');
+
+  const spaceRef = doc(db, ROOT.spaces, spaceId);
+  const space = await getDoc(spaceRef);
+  const profileRef = doc(db, ROOT.users, uid);
+
+  if (!space.exists()) {
+    // Ruang hilang: lepas tautan profil agar user tidak terkunci di onboarding.
+    await updateDoc(profileRef, { spaceId: null });
+    return { left: true, alreadyLeft: true };
+  }
+
+  const memberIds = Array.isArray(space.data().memberIds) ? space.data().memberIds : [];
+  const index = memberIds.indexOf(uid);
+
+  if (index === -1) {
+    // Sudah bukan anggota (mis. tab/retry kedua) — pastikan profil tidak basi.
+    await updateDoc(profileRef, { spaceId: null });
+    return { left: true, alreadyLeft: true };
+  }
+  if (index === 0) {
+    throw new Error(
+      'Pemilik ruang tidak dapat keluar secara langsung. Opsi pemindahan kepemilikan/ruang belum tersedia pada checkpoint ini.'
+    );
+  }
+
+  const batch = writeBatch(db);
+  batch.update(spaceRef, { memberIds: nextMemberIds(memberIds, uid) });
+  batch.update(profileRef, { spaceId: null });
+  try {
+    await batch.commit();
+  } catch (err) {
+    if (err?.code === 'permission-denied') {
+      // Kondisi berubah di tengah jalan (mis. tab lain sudah keluar / tulis
+      // tidak lagi valid). Cek ulang dan selesaikan secara idempoten.
+      const fresh = await getDoc(spaceRef);
+      const freshMembers = fresh.exists() && Array.isArray(fresh.data().memberIds)
+        ? fresh.data().memberIds
+        : [];
+      if (!freshMembers.includes(uid)) {
+        await updateDoc(profileRef, { spaceId: null });
+        return { left: true, alreadyLeft: true };
+      }
+      throw new Error('Gagal keluar dari ruang. Muat ulang halaman lalu coba lagi.');
+    }
+    throw err;
+  }
+  return { left: true, alreadyLeft: false };
 }
 
 // Peran "Kamu" / "Partner" konsisten berdasarkan urutan memberIds (pengisi pertama = owner).

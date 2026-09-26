@@ -335,6 +335,46 @@ async function seed() {
       createdAt: serverTimestamp(),
       schemaVersion: 1
     });
+
+    // Bahan uji CP0 (keluar dari ruang): pemilik lina, partner budi.
+    // Fixture terpisah agar uji leave tidak mengubah ruang lain (space1, dst).
+    await set('spaces/space_leave', {
+      name: 'Ruang Leave',
+      memberIds: ['lina', 'budi'],
+      createdAt: serverTimestamp(),
+      schemaVersion: 1
+    });
+    await set('users/lina', {
+      displayName: 'Lina',
+      avatar: '',
+      color: '#4f9b78',
+      spaceId: 'space_leave',
+      schemaVersion: 1
+    });
+    await set('users/budi', {
+      displayName: 'Budi',
+      avatar: '',
+      color: '#c47b4a',
+      spaceId: 'space_leave',
+      schemaVersion: 1
+    });
+    // Konten shared di ruang itu: wajib TETAP ADA setelah partner keluar.
+    await set('spaces/space_leave/notes/n_leave', {
+      title: 'Catatan Shared',
+      body: 'Tetap milik ruang setelah partner keluar.',
+      topicId: '',
+      tags: [],
+      description: '',
+      status: 'draft',
+      difficulty: 'beginner',
+      visibility: 'shared',
+      ownerId: 'lina',
+      commentCount: 0,
+      deletedAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      schemaVersion: 1
+    });
   });
 }
 
@@ -990,6 +1030,149 @@ async function main() {
       memberIds: ['hana', 'xenia', 'zoe'],
       _joinCode: code
     }));
+  });
+
+  // ---------- CP0: keluar dari ruang belajar ----------
+  // Helper batch yang hanya menyentuh memberIds (untuk uji negatif & positif).
+  const leaveOnly = (ctx, memberIds) => {
+    const b = writeBatch(fsDb(ctx));
+    b.update(doc(fsDb(ctx), 'spaces/space_leave'), { memberIds });
+    return b;
+  };
+
+  await it('CP0: owner tidak boleh keluar dengan cara biasa', async () => {
+    const lina = authenticated('lina');
+    // Pemilik (indeks 0) melepas diri → post-state menyisakan partner, bukan
+    // pemilik lama (newM[0] == oldM[0] gagal) → ditolak rules.
+    await assertFails(leaveOnly(lina, ['budi']).commit());
+    // Keluar sampai menyisakan 0 anggota juga ditolak (ruang wajib tetap ada).
+    await assertFails(leaveOnly(lina, []).commit());
+  });
+
+  await it('CP0: non-member & tamu tidak boleh mengubah memberIds', async () => {
+    const carol = authenticated('carol');
+    await assertFails(leaveOnly(carol, ['lina']).commit());
+    await assertFails(leaveOnly(anon, ['lina']).commit());
+  });
+
+  await it('CP0: partner ditolak mengubah memberIds secara sembarangan', async () => {
+    const budi = authenticated('budi');
+    // anggota ketiga / membuang pemilik / menukar urutan (mengaku owner)
+    await assertFails(leaveOnly(budi, ['lina', 'budi', 'zoe']).commit());
+    await assertFails(leaveOnly(budi, ['budi']).commit());
+    await assertFails(leaveOnly(budi, ['budi', 'lina']).commit());
+    // memberIds dikosongkan → validSpace menolak
+    await assertFails(leaveOnly(budi, []).commit());
+    // keluar sambil mengubah nama ruang → mergedOnly(['memberIds']) menolak
+    const mixed = writeBatch(fsDb(budi));
+    mixed.update(doc(fsDb(budi), 'spaces/space_leave'), { memberIds: ['lina'], name: 'Diambil alih' });
+    await assertFails(mixed.commit());
+  });
+
+  await it('CP0: profil tidak bisa dipindah/di-null selagi masih anggota', async () => {
+    const budi = authenticated('budi');
+    // memindahkan diri ke ruang lain lewat write ilegal → ditolak
+    await assertFails(updateDoc(doc(fsDb(budi), 'users/budi'), { spaceId: 'space3' }));
+    // melepas tautan TANPA keluar ruang (memberIds tidak ikut berubah) → ditolak
+    await assertFails(updateDoc(doc(fsDb(budi), 'users/budi'), { spaceId: null }));
+  });
+
+  await it('CP0: partner keluar — batch atomik; ruang & konten shared tetap aman', async () => {
+    const budi = authenticated('budi');
+    const batch = leaveOnly(budi, ['lina']);
+    batch.update(doc(fsDb(budi), 'users/budi'), { spaceId: null });
+    await assertSucceeds(batch.commit());
+
+    const lina = authenticated('lina');
+    const spaceSnap = await getDoc(doc(fsDb(lina), 'spaces/space_leave'));
+    assert.equal(spaceSnap.exists(), true, 'ruang TIDAK dihapus');
+    assert.deepEqual(spaceSnap.data().memberIds, ['lina'], 'memberIds 2 → 1, pemilik tetap');
+
+    const profile = await getDoc(doc(fsDb(budi), 'users/budi'));
+    assert.equal(profile.data().spaceId, null, 'users/{uid}.spaceId direset');
+
+    // Konten shared tidak terhapus dan tetap terbaca pemilik…
+    const note = await getDoc(doc(fsDb(lina), 'spaces/space_leave/notes/n_leave'));
+    assert.equal(note.exists(), true, 'konten shared tetap ada');
+    // …sementara partner lama kehilangan akses ke ruang & data lama.
+    await assertFails(getDoc(doc(fsDb(budi), 'spaces/space_leave')));
+    await assertFails(getDoc(doc(fsDb(budi), 'spaces/space_leave/notes/n_leave')));
+    await assertFails(getDoc(doc(fsDb(budi), 'users/lina')));
+  });
+
+  await it('CP0: leave kedua kali ditolak rules (client menangani idempoten)', async () => {
+    const budi = authenticated('budi');
+    await assertFails(leaveOnly(budi, ['lina']).commit());
+    // Profil sudah null; menulis null lagi = no-change → diizinkan (retry aman).
+    await assertSucceeds(updateDoc(doc(fsDb(budi), 'users/budi'), { spaceId: null }));
+  });
+
+  await it('CP0: profil yang menunjuk ruang tanpa keanggotaan bisa dilepas (pemulihan)', async () => {
+    // Meniru leave terputus: profil masih menunjuk ruang, keanggotaan sudah
+    // tidak ada. Aturan baru mengizinkan pelepasan tautan sendiri di kondisi ini.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'users/lina2'), {
+        displayName: 'Lina2',
+        avatar: '',
+        color: '#4f9b78',
+        spaceId: 'space_leave',
+        schemaVersion: 1
+      });
+    });
+    const lina2 = authenticated('lina2');
+    // Perilaku ownsSpaceLink YANG SUDAH ADA: metadata ruang masih terbaca
+    // selama tautan profil menunjuk ke sana — tetapi ISI ruang tetap tertutup
+    // (subkoleksi memakai isMember, bukan tautan profil).
+    await assertSucceeds(getDoc(doc(fsDb(lina2), 'spaces/space_leave')));
+    await assertFails(getDoc(doc(fsDb(lina2), 'spaces/space_leave/notes/n_leave')));
+    // Pelepasan tautan sendiri diizinkan HANYA karena sudah bukan anggota…
+    await assertSucceeds(updateDoc(doc(fsDb(lina2), 'users/lina2'), { spaceId: null }));
+    // …dan setelah tautan lepas, ruang ikut tertutup sepenuhnya.
+    await assertFails(getDoc(doc(fsDb(lina2), 'spaces/space_leave')));
+  });
+
+  await it('CP0: setelah keluar, partner bisa bergabung kembali dengan undangan baru', async () => {
+    const lina = authenticated('lina');
+    // Ruang kini 1 anggota → pemilik boleh membuat undangan baru.
+    await assertSucceeds(writeInvite(lina, 'rejoin', {
+      spaceId: 'space_leave',
+      spaceName: 'Ruang Leave',
+      createdBy: 'lina'
+    }));
+
+    const budi = authenticated('budi');
+    const code = inviteCode('rejoin');
+    const join = writeBatch(fsDb(budi));
+    join.update(doc(fsDb(budi), 'spaces/space_leave'), {
+      memberIds: ['lina', 'budi'],
+      _joinCode: code
+    });
+    join.update(doc(fsDb(budi), `invites/${code}`), {
+      used: true,
+      usedBy: 'budi',
+      usedAt: serverTimestamp()
+    });
+    await assertSucceeds(join.commit());
+    await assertSucceeds(updateDoc(doc(fsDb(budi), 'users/budi'), { spaceId: 'space_leave' }));
+
+    const spaceSnap = await getDoc(doc(fsDb(lina), 'spaces/space_leave'));
+    assert.deepEqual(spaceSnap.data().memberIds, ['lina', 'budi'], 'rejoin mengembalikan 2 anggota');
+
+    // Undangan yang sudah dipakai tetap tidak bisa dipakai ulang oleh siapa pun.
+    const zoe = authenticated('zoe');
+    const replay = writeBatch(fsDb(zoe));
+    replay.update(doc(fsDb(zoe), 'spaces/space_leave'), {
+      memberIds: ['lina', 'budi', 'zoe'],
+      _joinCode: code
+    });
+    replay.update(doc(fsDb(zoe), `invites/${code}`), {
+      used: true,
+      usedBy: 'zoe',
+      usedAt: serverTimestamp()
+    });
+    await assertFails(replay.commit());
+    const inviteSnap = await getDoc(doc(fsDb(lina), `invites/${code}`));
+    assert.equal(inviteSnap.data().used, true);
   });
 
   await it('memberIds ruang penuh tidak bisa diubah client', async () => {

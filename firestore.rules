@@ -118,12 +118,32 @@ service cloud.firestore {
           && !exists(/databases/$(database)/documents/spaces/$(oldSpaceId))
         )
         || (
+          // CP0 (leave): boleh melepas tautan profil SENDIRI ketika keanggotaan
+          // ruang tsb sudah dicabut (getAfter = keadaan SETELAH batch).
+          // Cabang ini TIDAK PERNAH boleh menautkan ke ruang lain karena
+          // d.spaceId wajib null; menulis spaceId baru tetap lewat isMemberOf.
+          oldSpaceId != null
+          && d.spaceId == null
+          && unlinkAfter(oldSpaceId)
+        )
+        || (
           oldSpaceId == null
           && (
             d.spaceId == null
             || (d.spaceId is string && isMemberOf(d.spaceId))
           )
         );
+    }
+
+    // Pemulihan setelah keanggotaan dicabut. existsAfter/getAfter melihat
+    // keadaan ruang sesudah batch, jadi aman untuk tulis satu langkah bersama
+    // dengan penghapusan memberIds. Ruang tanpa memberIds dianggap tidak
+    // memasukkan siapa pun (fail-open HANYA untuk melepas tautan sendiri).
+    function unlinkAfter(oldSpaceId) {
+      let p = /databases/$(database)/documents/spaces/$(oldSpaceId);
+      return !existsAfter(p)
+        || !(getAfter(p).data.memberIds is list)
+        || !getAfter(p).data.memberIds.hasAny([request.auth.uid]);
     }
 
     match /users/{uid} {
@@ -181,6 +201,24 @@ service cloud.firestore {
       ) && validSpace(request.resource.data);
     }
 
+    // CP0 — partner keluar dari ruang. Hanya ANGGOTA indeks 1 (bukan pemilik)
+    // boleh melepas DIRINYA SENDIRI. Kondisi post-write diverifikasi rules:
+    //   - hanya field memberIds yang boleh berubah (nama/_joinCode ikut tidak boleh);
+    //   - memberIds 2 -> 1 dan anggota tersisa HARUS pemilik lama (indeks 0),
+    //     sehingga pemilik tidak bisa dihapus dan ruang tidak pernah jadi 0/3;
+    //   - pemohon wajib indeks 1 pada keadaan lama (non-anggota/anonim gagal).
+    // Client tidak dipercaya: ia hanya menulis hasil filter; bentuk akhir
+    // array diperiksa ulang di sini + validSpace (ukuran 1..2, unik, non-kosong).
+    function partnerLeaveOk(spaceId) {
+      let oldM = resource.data.memberIds;
+      let newM = request.resource.data.memberIds;
+      return isMember(spaceId)
+        && mergedOnly(['memberIds'])
+        && validSpace(request.resource.data)
+        && oldM is list && oldM.size() == 2 && oldM[1] == request.auth.uid
+        && newM is list && newM.size() == 1 && newM[0] == oldM[0];
+    }
+
     // Join. CATATAN KEAMANAN: `expiresAt > request.time` adalah
     // satu-satunya pengecualikan atas aturan "tanpa request.time",
     // karena masa berlaku invite 24 jam memang harus dicek server.
@@ -221,7 +259,8 @@ service cloud.firestore {
 
       allow update: if verified()
         && ((isMemberOf(spaceId) && spaceMemberUpdateOk())
-            || canJoin(spaceId));
+            || canJoin(spaceId)
+            || partnerLeaveOk(spaceId));
 
       allow delete: if false;
     }

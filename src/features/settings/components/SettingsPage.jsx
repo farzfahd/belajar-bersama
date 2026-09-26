@@ -11,13 +11,19 @@ import { useProfile } from '../../auth/hooks/useProfile';
 import { useSpace } from '../../space/hooks/useSpace';
 import { useUserProfile } from '../../space/hooks/useUserProfile';
 import { useSpaceId } from '../../space/SpaceContext';
-import { renameSpace, spaceRoles } from '../../space/services/spaceService';
+import { leaveSpace, renameSpace, spaceRoles } from '../../space/services/spaceService';
 import {
   resetPassword,
   signOutCurrent,
   updateProfile
 } from '../../auth/services/authService';
 import InviteCard from '../../space/components/InviteCard';
+import Modal from '../../../shared/ui/Modal';
+import {
+  AFTER_LEAVE_ROUTE,
+  LEAVE_CONSEQUENCES,
+  leaveEligibility
+} from '../../space/utils/leave';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import { initialsOf } from '../../../shared/utils/identity';
 import { fmtDate } from '../../../shared/utils/time';
@@ -131,6 +137,31 @@ export default function SettingsPage() {
       toast.error(toErrorMessage(err, 'Gagal mengubah nama ruang.'));
     } finally {
       setSavingSpace(false);
+    }
+  };
+
+  // ---- Keluar dari ruang (CP0) ----
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  // Kelayakan ditentukan dari data ruang yang sudah termuat: partner (indeks 1)
+  // boleh keluar, pemilik (indeks 0) hanya mendapat penjelasan, dan saat data
+  // belum siap tidak ada aksi yang ditampilkan (sama prinsipnya dengan guard InviteCard).
+  const leaveState = leaveEligibility({ spaceId, space, uid: user?.uid });
+
+  const doLeave = async () => {
+    setLeaving(true);
+    try {
+      await leaveSpace(spaceId);
+      setLeaveOpen(false);
+      toast.success('Kamu telah keluar dari ruang belajar.');
+      // SpaceGate subscribe users/{uid} (live): begitu spaceId = null ia
+      // langsung merender OnboardingScreen menggantikan Outlet (tanpa
+      // redirect melingkar); navigate ini hanya menormalkan URL.
+      navigate(AFTER_LEAVE_ROUTE, { replace: true });
+    } catch (err) {
+      toast.error(toErrorMessage(err, 'Gagal keluar dari ruang.'));
+    } finally {
+      setLeaving(false);
     }
   };
 
@@ -311,6 +342,53 @@ export default function SettingsPage() {
         </div>
 
         <InviteCard spaceId={spaceId} space={space} pending={pending} />
+
+        {/* Keluar dari ruang (CP0): hanya partner; pemilik mendapat penjelasan. */}
+        {leaveState.reason === 'partner' && (
+          <div className="border-t border-line pt-4">
+            <Button variant="danger" onClick={() => setLeaveOpen(true)}>
+              Keluar dari Ruang
+            </Button>
+            <p className="mt-2 max-w-xl text-[12.5px] leading-relaxed text-dimmer">
+              Kamu keluar dari ruang ini tanpa menghapus data bersama, dan bisa bergabung
+              kembali lewat undangan baru dari partner.
+            </p>
+          </div>
+        )}
+        {leaveState.reason === 'owner' && (
+          <div className="border-t border-line pt-4">
+            <p className="max-w-xl text-[12.5px] leading-relaxed text-dimmer">
+              Pemilik ruang tidak dapat keluar secara langsung. Opsi pemindahan kepemilikan
+              dan penghapusan ruang belum tersedia saat ini.
+            </p>
+          </div>
+        )}
+
+        <Modal
+          open={leaveOpen}
+          onClose={() => !leaving && setLeaveOpen(false)}
+          title="Keluar dari ruang belajar?"
+          subtitle={`Kamu akan keluar dari "${space?.name || 'ruang ini'}".`}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setLeaveOpen(false)} disabled={leaving}>
+                Batal
+              </Button>
+              <Button variant="danger" onClick={doLeave} loading={leaving}>
+                Ya, keluar
+              </Button>
+            </>
+          }
+        >
+          <ul className="space-y-2 text-[13.5px] leading-relaxed text-dim">
+            {LEAVE_CONSEQUENCES.map((item) => (
+              <li key={item} className="flex gap-2">
+                <span aria-hidden="true">•</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </Modal>
 
         {space?.createdAt && (
           <p className="font-mono text-[10.5px] uppercase tracking-[.06em] text-dimmer">

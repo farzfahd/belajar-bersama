@@ -164,7 +164,80 @@ Tidak ada tes lama yang dihapus: 91 = 84 (CP1-A) + 7 blok baru.
 - **Status fix invite (kode):** selesai di kode + unit + rules; **verifikasi produksi BELUM dilakukan** (environment ini tidak punya akses browser/device produksi). Belum dapat mengklaim "fixed di produksi" hanya berdasarkan emulator.
 - **Sisa:** (1) uji manual di produksi setelah deploy: owner → Settings → Buat kode → kode tampil, dan partner → masukkan kode → `memberIds` bertambah → `users/{partnerUid}.spaceId` terisi → SpaceGate lolos; (2) `npm run test:privacy:e2e`; (3) commit (tidak dilakukan sesuai aturan AGENTS.md kecuali diminta).
 
-## 2. Riwayat pekerjaan
+## CP0 — Space Management / Leave Space
+
+### Audit (kondisi sebelum perubahan — sumber: kode aktual, bukan dokumen)
+- Dibaca: `docs/ONBOARDING-AI.md` §2–3, `docs/PROGRESS.md`, `firestore.rules`, `src/features/space/**` (`spaceService`, `SpaceContext`, `useSpace`, `OnboardingScreen`, `InviteCard`), `src/app/router.jsx` (`SpaceGate`), `SettingsPage`, `useProfile`, `authService`, seed + seluruh tes space/invite di `tests/firestore.rules.test.js`. `git status` **bersih** — pekerjaan sebelumnya (CP1-A + fix invite) sudah ter-commit (`64043ba`).
+- **Cara join bekerja**: OnboardingScreen → `joinSpaceByCode()` → baca `invites/{code}` → `recoverSpaceLink()` → **batch** `spaces/{id}` (`memberIds = [createdBy, uid]` + `_joinCode`) & `invites/{code}` (`used/usedBy/usedAt`) → **setelah batch** `updateDoc(users/{uid}.spaceId)` (urutan terpisah; pelajaran batch-lama yang terekam di PROGRESS).
+- **Owner ditentukan**: tidak ada field — pemilik = `memberIds[0]` (`spaceRoles` index 0 = `isOwner`; rules `canJoin` memakai `inv.createdBy == oldM[0]`).
+- **`memberIds`**: `spaces/{spaceId}.memberIds` — list uid, maksimal 2, unik (`validSpace`).
+- **`users/{uid}.spaceId`**: tautan profil; dikonsumsi `SpaceGate` (Onboarding vs AppShell), `ownsSpaceLink` (rules get space), `recoverSpaceLink`.
+- **Fungsi leave/remove/transfer**: **TIDAK ADA** (grep seluruh `src/` hanya menemukan tombol *Keluar* = `signOutCurrent`).
+- **Rule yang mengatur `memberIds`**: `spaces.update` = `isMemberOf && spaceMemberUpdateOk()` (hanya `name` / hapus `_joinCode`) **atau** `canJoin` (non-anggota, 1→2, wajib invite). `users.spaceId → null` hanya diizinkan bila dokumen ruang hilang.
+
+### Root cause / existing limitation
+- Partner **tidak bisa keluar sama sekali**: kedua langkah yang dibutuhkan ditolak rules — perubahan `memberIds` oleh anggota tidak punya jalur, dan `spaceId → null` ditolak selama dokumen ruang masih ada.
+- Tidak ada aksi/UI leave apa pun (menyelesaikan masalah dengan menghapus tombol ≠ state transition).
+
+### Architecture decision
+1. **Ditegakkan di rules, bukan cuma UI** — `partnerLeaveOk()`: hanya anggota **indeks 1** (bukan pemilik) boleh mengurangi `memberIds` 2→1 dengan post-state persis `[pemilik lama]`; hanya field `memberIds` yang boleh berubah (`mergedOnly`); bentuk array diverifikasi ulang lewat `validSpace`. Client tidak dipercaya.
+2. **Atomic** — satu `writeBatch` untuk `memberIds` + `users/{uid}.spaceId → null`. Aturan profil memakai `existsAfter`/`getAfter` sehingga melihat keadaan ruang **setelah** batch (pola `getAfter` sudah teruji di `validParent` sejak CP1) — itulah alasan rules boleh diubah kecil-kecilan tanpa melemahkan security.
+3. **Idempoten / anti-race** — leave kedua kali, dua tab, dan retry jaringan: rules menolak batch kedua (anggota sudah 1), service menangkap `permission-denied`, membaca ulang, lalu cukup melepas tautan profil (no-op bila sudah null). `recoverSpaceLink` kini **melepas tautan** bila sudah bukan anggota (sebelumnya melempar `"Profil tertaut ke ruang yang tidak bisa diakses"` → user terkunci dan tidak bisa join ulang).
+4. **Owner** — simple leave disembunyikan + penjelasan jelas; transfer kepemilikan & hapus ruang **sengaja TIDAK** diimplementasikan di CP0 (sesuai spec).
+5. **State setelah leave** — `users/{uid}.spaceId = null` → `SpaceGate` (subscribe live) langsung merender `OnboardingScreen` menggantikan `<Outlet/>`, sehingga `SpaceProvider` + seluruh listener ruang lama unmount (tidak ada UI/listener basi); `navigate('/dashboard', {replace:true})` hanya menormalkan URL — tanpa `<Navigate>` melingkar.
+6. **Tanpa struktur data baru** (spec §2): `users/{uid}.spaceId`, `spaces/{spaceId}.memberIds` dipertahankan persis.
+
+### Files changed
+| File | Perubahan |
+|---|---|
+| `firestore.rules` | + `partnerLeaveOk(spaceId)` (disambungkan ke `allow update` spaces sebagai opsi ketiga) dan `unlinkAfter(oldSpaceId)` (cabang baru `spaceIdChangeOk`) |
+| `src/features/space/services/spaceService.js` | + `leaveSpace(spaceId)` (batch atomik, guard owner, idempoten); `recoverSpaceLink` melepas tautan saat bukan anggota |
+| `src/features/space/utils/leave.js` (baru) | Helper murni: `leaveEligibility`, `nextMemberIds`, `AFTER_LEAVE_ROUTE`, `LEAVE_CONSEQUENCES` |
+| `src/features/settings/components/SettingsPage.jsx` | Aksi **Keluar dari Ruang** (partner) + modal konfirmasi 3 poin; info khusus owner; state `leaveOpen/leaving` + `doLeave()` |
+| `tests/leave.test.mjs` (baru) | 6 unit test: eligibility owner/partner/not-ready, `nextMemberIds`, tujuan state, 3 konsekuensi modal |
+| `package.json` | + `test:leave`; `test:units` menyertakan `tests/leave.test.mjs` |
+| `tests/firestore.rules.test.js` | + fixture `spaces/space_leave` (lina owner, budi partner) + note shared + 8 blok `CP0:` |
+| `docs/PROGRESS.md` | Entri CP0 ini |
+
+### Schema impact
+- **Tidak ada** perubahan struktur/tipe data; field & path identik. `memberIds` tetap 1..2 anggota (`validSpace` tidak diubah), ruang tidak pernah dihapus, `spaceId` tetap string|null.
+
+### Rules impact (detaill, apa yang menutup serangan mana)
+- `partnerLeaveOk` MENUTUP: non-anggota/anonim mengubah `memberIds` (wajib `isMember`), partner menghapus pemilik / menambah anggota / menukar urutan / mengosongkan array (post-state `size==1 && newM[0]==oldM[0]` + `validSpace`), partner keluar sambil mengubah `name`/`_joinCode` (`mergedOnly(['memberIds'])`).
+- `unlinkAfter` MENUTUP: memindahkan profil ke ruang lain (cabang ini hanya boleh `d.spaceId == null`), melepas tautan selagi masih anggota (ruang post-state masih memuat uid → ditolak). Cabang lama `!exists(...)` tetap utuh.
+- Tidak diubah: `verified()`, `spaceMemberUpdateOk`, `canJoin`, `validSpace`, seluruh cek invite, dan semua rule lain.
+
+### 2026-09-26 — CP0: verifikasi final (SELESAI)
+
+**Test results (final):**
+
+| Test Suite | Command | Result |
+|---|---|---|
+| Unit leave | `npm run test:leave` | **6/6 PASS** |
+| All units | `npm run test:units` | **47/47 PASS** (41 original + 6 leave) |
+| Firestore Rules | `npm run test:rules` | **99/99 PASS** (exit 0) |
+| Production build | `npm run build` | **PASS** (6.65s, `dist/404.html` created) |
+
+**Definition of Done — CP0:**
+- [x] Partner dapat keluar (leaveSpace + batch atomik)
+- [x] Owner tidak dapat simple leave (tombol disembunyikan + error message jelas)
+- [x] `user.spaceId` ter-reset ke null
+- [x] `memberIds` konsisten (2→1, pemilik dipertahankan)
+- [x] Space tidak terhapus
+- [x] Shared content tetap aman & hanya owner yang akses
+- [x] Redirect benar → OnboardingScreen via SpaceGate live listener
+- [x] Rules aman: `partnerLeaveOk` + `unlinkAfter` mencegah bypass
+- [x] Rules tests PASS (99/99)
+- [x] Unit tests PASS (47/47)
+- [x] Invite tests PASS (7/7)
+- [x] Build PASS
+- [x] docs/PROGRESS.md diperbarui
+
+**Known limitations:**
+- Transfer ownership / delete space belum diimplementasikan (sesuai spec CP0)
+- `npm run test:privacy:e2e` belum dijalankan (butuh emulator + headless Chrome; dicatat di sisa)
+
+---
 
 ### 2026-09-26 — CP3 (baru) T1: skema data + rules untuk Questions/Quiz/Tasks/Today/Progress
 - **Keputusan pengguna:** lanjut ke CP3 (pekerjaan baru: quiz/task & progress dengan status+skor), cakupannya **Questions (bank soal), Quiz (soal+skor), Tasks (penugasan), dan Today (rencana harian)**; status & skor disimpan **per topik per user**; "commit/sinkron" dimaknai **sinkron live saja** (onSnapshot), tanpa fitur commit terpisah.
