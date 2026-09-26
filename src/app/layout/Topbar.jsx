@@ -8,6 +8,7 @@ import { useSpace } from '../../features/space/hooks/useSpace';
 import { navByPath } from './navConfig';
 import Avatar from '../../shared/components/Avatar';
 import GlobalSearchDialog from '../../features/search/components/GlobalSearchDialog';
+import { IconMenu, IconSearch, IconThemeDark, IconThemeLight } from '../../shared/icons';
 
 // Topbar solid (tanpa blur), sticky di atas. Kiri: hamburger (mobile) + brand.
 // Kanan: status sinkron, tombol tema, avatar menuju Settings.
@@ -47,7 +48,7 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
 
   return (
     <>
-      <header className="sticky top-0 z-40 h-[60px] border-b border-line bg-bg">
+      <header className="sticky top-0 z-40 h-[60px] shrink-0 border-b border-line bg-bg">
       <div className="flex h-full items-center gap-3 px-4 sm:px-6">
         <button
           type="button"
@@ -56,7 +57,7 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
           aria-expanded={drawerOpen}
           className="icon-btn min-[860px]:hidden"
         >
-          ☰
+          <IconMenu size={20} />
         </button>
 
         <div className="min-w-0">
@@ -74,7 +75,7 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
             title="Cari di ruang belajar ( / atau Ctrl+K )"
             className="icon-btn"
           >
-            ⌕
+            <IconSearch size={20} />
           </button>
           <span className="hidden font-mono text-[10px] uppercase tracking-[.08em] text-dimmer sm:inline">
             {online ? 'terhubung' : 'offline'} · {space.error ? 'gagal sinkron' : space.pending ? 'menyimpan…' : 'tersinkron'}
@@ -86,7 +87,7 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
             className="icon-btn"
             title={theme === 'dark' ? 'Mode terang' : 'Mode gelap'}
           >
-            {theme === 'dark' ? '☀️' : '🌙'}
+            {theme === 'dark' ? <IconThemeLight size={20} /> : <IconThemeDark size={20} />}
           </button>
           <Link
             to="/settings"

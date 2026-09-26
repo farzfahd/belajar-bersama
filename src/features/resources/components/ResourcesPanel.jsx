@@ -1,3 +1,4 @@
+import { IconExternalLink } from '../../../shared/icons';
 import { useMemo, useState } from 'react';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
@@ -200,7 +201,7 @@ export default function ResourcesPanel({ scopeIds = null, presetTopicId = null }
 
       {!contentLoading && !contentError && topics.length > 0 && list.length === 0 && (
         <EmptyState
-          icon="🔗"
+          icon={<IconExternalLink size={26} />}
           title="Belum ada resource"
           description="Simpan tautan sumber belajar (website, YouTube, buku, paper, repo, dsb.) pada sebuah topik Roadmap, lalu tandai status bacanya."
           action={scopeIds ? null : <Button onClick={() => setForm({ initial: null, preset: filterTopic !== 'all' ? filterTopic : null })}>＋ Resource baru</Button>}

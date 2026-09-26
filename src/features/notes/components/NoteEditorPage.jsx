@@ -1,3 +1,4 @@
+import { IconEmptyNote } from '../../../shared/icons';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -537,7 +538,7 @@ export default function NoteEditorPage() {
   if (!isNew && !note) {
     return (
       <EmptyState
-        icon="📝"
+        icon={<IconEmptyNote size={26} />}
         title="Catatan tidak ditemukan"
         description="Catatan ini mungkin sudah dihapus oleh pemiliknya."
         action={<Link to={backTo}><Button variant="ghost">← Kembali</Button></Link>}

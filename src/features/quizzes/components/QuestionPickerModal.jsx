@@ -4,7 +4,7 @@ import Button from '../../../shared/ui/Button';
 import { QUIZ_LIMITS } from '../../../lib/constants';
 import QuestionPicker from './QuestionPicker';
 
-// Modal "Tambah dari Question Bank": multi-select soal yang SUDAH ada.
+// Modal "Pilih Soal Tersimpan": multi-select soal yang sudah ada.
 // Tidak pernah membuat Question document baru — hanya mengembalikan daftar id
 // untuk ditambahkan ke `quiz.questionIds` (Bagian H).
 export default function QuestionPickerModal({
@@ -50,8 +50,8 @@ export default function QuestionPickerModal({
       open={open}
       onClose={onClose}
       wide
-      title="Tambah dari Question Bank"
-      subtitle="Soal yang sudah dipakai kuis ini tidak bisa dipilih lagi."
+      title="Pilih Soal Tersimpan"
+      subtitle="Soal yang sudah dipakai di kuis ini tidak bisa dipilih lagi."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

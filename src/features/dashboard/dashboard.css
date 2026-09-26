@@ -1,0 +1,192 @@
+/* ============================================================
+   Dashboard — token & komponen lokal (Phase 1)
+   ------------------------------------------------------------
+   SEMUA selector di file ini di-scope di bawah `.dashboard-root`,
+   jadi tidak mungkin bocor ke halaman lain. Token global
+   (tailwind.config.js / index.css) TIDAK diubah di fase ini.
+
+   Hanya 4 token warna yang ditulis eksplisit per tema (sesuai
+   spesifikasi); sisanya diturunkan dengan color-mix agar hierarki
+   teks tetap konsisten tanpa menambah token baru.
+   ============================================================ */
+
+.dashboard-root {
+  --db-bg: #0a0e14;
+  --db-text: #e6e9ef;
+  --db-accent: #5b6ef5;
+  --db-border: #232838;
+
+  /* Turunan */
+  --db-surface: color-mix(in srgb, var(--db-text) 3%, var(--db-bg));
+  --db-dim: color-mix(in srgb, var(--db-text) 72%, var(--db-bg));
+  --db-dimmer: color-mix(in srgb, var(--db-text) 50%, var(--db-bg));
+  --db-glow: 0 0 0 1px var(--db-accent), 0 0 12px rgba(91, 110, 245, 0.25);
+}
+
+:root[data-theme='light'] .dashboard-root {
+  --db-bg: #f7f8fb;
+  --db-text: #12151c;
+  --db-accent: #5b6ef5;
+  --db-border: #d7dbe4;
+}
+
+/* ---------- Panel / card: border sebagai struktur utama ---------- */
+.db-card {
+  background: var(--db-surface);
+  border: 1px solid var(--db-border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+/* Glow hanya saat interaksi, tidak pernah permanen. */
+.db-card--interactive:hover,
+.db-card--interactive:focus-within {
+  box-shadow: var(--db-glow);
+}
+
+/* ---------- Tipografi ---------- */
+/* Label: sans, sentence-case, tracking ringan. Tidak mono/uppercase. */
+.db-label {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  color: var(--db-dim);
+}
+.db-label--meta {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--db-dimmer);
+}
+.db-section-title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: var(--db-text);
+}
+/* Judul halaman: tetap serif (font produksi), dikecilkan agar tenang. */
+.db-title {
+  font-family: var(--font-head);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--db-text);
+}
+/* Angka statistik: tabular agar angka sejajar dalam kolom. */
+.db-num {
+  font-family: var(--font-head);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--db-text);
+}
+
+/* ---------- Baris daftar ---------- */
+.db-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--db-border);
+  transition: box-shadow 0.15s ease;
+}
+.db-row:last-child { border-bottom: 0; }
+.db-row:hover,
+.db-row:focus-visible {
+  box-shadow: var(--db-glow);
+}
+.db-row-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--db-text);
+}
+.db-row-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--db-dimmer);
+}
+
+/* ---------- Tombol aksi ---------- */
+.db-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--db-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--db-dim);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: box-shadow 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.db-action:hover,
+.db-action:focus-visible {
+  color: var(--db-accent);
+  border-color: var(--db-accent);
+  box-shadow: var(--db-glow);
+}
+
+/* ---------- Chip anggota ---------- */
+.db-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  border: 1px solid var(--db-border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+/* ---------- Progress bar ---------- */
+.db-progress-track {
+  height: 4px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--db-border);
+}
+.db-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s ease-out;
+}
+
+/* ---------- Marka empty state ---------- */
+.db-empty-mark { color: var(--db-dimmer); }
+
+/* ---------- Pemisahan section ---------- */
+.db-divider {
+  border: 0;
+  border-top: 1px solid var(--db-border);
+  margin: 0;
+}
+/* >=1280px (xl): Personal / Partner / Together berdampingan dengan
+   separator vertikal halus. <1280px: separator horizontal di atas. */
+@media (min-width: 1280px) {
+  .db-sections { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .db-section {
+    padding-left: 20px;
+    padding-right: 20px;
+    border-left: 1px solid var(--db-border);
+  }
+  .db-section:first-child { padding-left: 0; border-left: 0; }
+  .db-section:last-child { padding-right: 0; }
+  .db-divider { display: none; }
+}

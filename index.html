@@ -6,6 +6,18 @@
      <meta id="theme-color" name="theme-color" content="#1a1714" />
      <meta name="description" content="Buku belajar privat untuk dua orang" />
     <title>Belajar Bersama</title>
+
+    <!-- Body font: Plus Jakarta Sans (token --font-body di src/index.css).
+         Hanya dimuat di produksi/online; saat offline browser otomatis jatuh ke
+         system-ui di token tersebut, sehingga tampilan tetap wajar.
+         Head (Newsreader) & mono (JetBrains Mono) sengaja BELUM dimuat di sini —
+         penggantiannya bagian dari Phase 3. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap"
+    />
   </head>
   <body>
     <div id="root"></div>

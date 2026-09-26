@@ -3,7 +3,7 @@ import Badge from '../../../shared/ui/Badge';
 import Spinner from '../../../shared/components/Spinner';
 import { QUESTION_TYPE_LABELS, STATUS_LABEL } from '../../../lib/constants';
 
-// Panel pemilihan soal dari bank soal. Presentasional: TIDAK membuka listener
+// Panel pemilihan soal tersimpan (reusable). Presentasional: TIDAK membuka listener
 // Firestore sendiri (data dikirim dari pemanggil), sehingga satu useQuestions
 // cukup untuk satu halaman. Dipakai di dalam QuizFormModal (buat kuis) dan
 // QuestionPickerModal (tambah dari bank).
@@ -14,7 +14,7 @@ export default function QuestionPicker({
   error = null,
   selected = [],
   onToggle,
-  emptyHint = 'Belum ada soal di bank soal. Buat soal dulu lewat tombol "+ Buat Soal".'
+  emptyHint = 'Belum ada soal tersimpan. Buat soal baru dari Quiz Editor dulu.'
 }) {
   const [search, setSearch] = useState('');
   const [topicFilter, setTopicFilter] = useState('');

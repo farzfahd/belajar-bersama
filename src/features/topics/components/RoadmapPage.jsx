@@ -1,3 +1,4 @@
+import { IconRoadmap } from '../../../shared/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -351,7 +352,7 @@ export default function RoadmapPage() {
 
       {!loading && !error && roots.length === 0 && (
         <EmptyState
-          icon="🗺️"
+          icon={<IconRoadmap size={26} />}
           title="Roadmap masih kosong"
           description="Buat subject pertama, lalu susun topic & subtopic di bawahnya. Klik &quot;＋ Import template roadmap&quot; untuk memuat contoh 3 level."
           action={

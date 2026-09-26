@@ -3,6 +3,7 @@ import { useAuthState } from '../../features/auth/hooks/useAuthState';
 import { useProfile } from '../../features/auth/hooks/useProfile';
 import { useSpace } from '../../features/space/hooks/useSpace';
 import { NAV, isNavItemActive } from './navConfig';
+import NavIcon from '../../shared/icons/NavIcon';
 import Avatar from '../../shared/components/Avatar';
 
 function NavLinkItem({ item, pathname }) {
@@ -18,9 +19,7 @@ function NavLinkItem({ item, pathname }) {
         }`
       }
     >
-      <span aria-hidden="true" className="text-[15px]">
-        {item.icon}
-      </span>
+      <NavIcon name={item.icon} size={18} />
       <span className="truncate">{item.label}</span>
       {item.comingSoon && (
         <span className="ml-auto font-mono text-[9px] uppercase tracking-[.08em] text-dimmer">
@@ -39,7 +38,7 @@ export default function Sidebar({ spaceId }) {
   const space = useSpace(spaceId);
 
   return (
-    <aside className="sticky top-[60px] hidden h-[calc(100vh-60px)] h-[calc(100dvh-60px)] w-[216px] shrink-0 overflow-y-auto border-r border-line bg-bg min-[860px]:block">
+    <aside className="hidden h-full min-h-0 w-[216px] shrink-0 overflow-y-auto border-r border-line bg-bg min-[860px]:block">
       <div className="flex h-full flex-col">
         <div className="border-b border-line px-5 py-4">
           <div className="font-head text-[16px] font-medium leading-none text-ink">

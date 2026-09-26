@@ -1,3 +1,4 @@
+import { IconSearch, IconEmptyNote } from '../../../shared/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -23,6 +24,7 @@ import {
   removeQuestionIdAt
 } from '../utils/quizQuestions';
 import QuestionPickerModal from './QuestionPickerModal';
+import AddQuestionModal from './AddQuestionModal';
 import {
   QUIZ_LIMITS,
   QUIZ_SETTINGS_DEFAULTS,
@@ -73,6 +75,7 @@ export default function QuizEditorPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [pending, setPending] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [questionFormOpen, setQuestionFormOpen] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
@@ -250,7 +253,7 @@ export default function QuizEditorPage() {
           ← Kembali ke daftar kuis
         </Button>
         <EmptyState
-          icon="🔍"
+          icon={<IconSearch size={26} />}
           title="Kuis Tidak Ditemukan"
           description="Kuis ini tidak ada di ruang ini, atau sudah dihapus."
           action={<Button onClick={() => navigate('/quiz')}>Lihat daftar kuis</Button>}
@@ -457,27 +460,33 @@ export default function QuizEditorPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="section-title">Soal dalam kuis ({rows.length})</h2>
           {isOwner && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setEditTarget(null);
-                  setQuestionFormOpen(true);
-                }}
-              >
-                ＋ Buat Soal
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setPickerOpen(true)}
-                disabled={rows.length >= QUIZ_LIMITS.maxQuestions}
-              >
-                Tambah dari Question Bank
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              onClick={() => setAddOpen(true)}
+              disabled={rows.length >= QUIZ_LIMITS.maxQuestions}
+              title={
+                rows.length >= QUIZ_LIMITS.maxQuestions
+                  ? `Kuis sudah mencapai batas ${QUIZ_LIMITS.maxQuestions} soal.`
+                  : undefined
+              }
+            >
+              ＋ Tambah Soal
+            </Button>
           )}
         </div>
+
+        {isOwner && (
+          <p className="text-[12px] text-dimmer">
+            Soal dibuat dari sini langsung masuk kuis ini dan tetap bisa dipakai di kuis lain.{' '}
+            <button
+              type="button"
+              onClick={() => navigate('/questions')}
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              Lihat semua soal tersimpan
+            </button>
+          </p>
+        )}
 
         {bankError && (
           <p className="rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
@@ -487,11 +496,13 @@ export default function QuizEditorPage() {
 
         {rows.length === 0 ? (
           <EmptyState
-            icon="📝"
-            title="Belum Ada Soal"
-            description="Tambahkan soal dari bank soal, atau buat soal baru yang otomatis masuk ke kuis ini."
+            icon={<IconEmptyNote size={26} />}
+            title="Quiz ini belum memiliki soal."
+            description="Buat soal baru, atau pilih soal yang sudah tersimpan untuk langsung dipakai di kuis ini."
             action={
-              isOwner ? <Button onClick={() => setPickerOpen(true)}>Tambah dari Question Bank</Button> : undefined
+              isOwner ? (
+                <Button onClick={() => setAddOpen(true)}>＋ Tambah Soal</Button>
+              ) : undefined
             }
           />
         ) : (
@@ -586,6 +597,22 @@ export default function QuizEditorPage() {
 
 
       {/* ---------- MODAL ---------- */}
+      {/* Satu pintu masuk "Tambah Soal" → dua jalur: form soal yang sudah ada
+          atau pemilih soal tersimpan. Keduanya tetap di dalam Quiz Editor. */}
+      <AddQuestionModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onCreateNew={() => {
+          setAddOpen(false);
+          setEditTarget(null);
+          setQuestionFormOpen(true);
+        }}
+        onPickSaved={() => {
+          setAddOpen(false);
+          setPickerOpen(true);
+        }}
+      />
+
       <QuestionPickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}

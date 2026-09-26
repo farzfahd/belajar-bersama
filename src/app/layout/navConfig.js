@@ -4,7 +4,7 @@ export const NAV = [
   {
     key: 'dashboard',
     label: 'Dashboard',
-    icon: '🏠',
+    icon: 'dashboard',
     path: '/dashboard',
     comingSoon: false,
     note: 'Ringkasan belajar kamu, partner, dan ruang berdua.'
@@ -12,7 +12,7 @@ export const NAV = [
   {
     key: 'today',
     label: 'Today',
-    icon: '📅',
+    icon: 'today',
     path: '/today',
     comingSoon: true,
     note: 'Rencana belajar harian untuk kamu & partner.'
@@ -20,7 +20,7 @@ export const NAV = [
   {
     key: 'learn',
     label: 'Learn',
-    icon: '📚',
+    icon: 'learn',
     path: '/learn',
     comingSoon: false,
     note: 'Catatan (Notes) + tautan sumber belajar (Resources) per topik.'
@@ -28,31 +28,26 @@ export const NAV = [
   {
     key: 'roadmap',
     label: 'Roadmap',
-    icon: '🗺️',
+    icon: 'roadmap',
     path: '/roadmap',
     comingSoon: false,
     note: 'Pohon topik 3 level: Subject → Topic → Subtopic.'
   },
-  {
-    key: 'questions',
-    label: 'Questions',
-    icon: '❓',
-    path: '/questions',
-    comingSoon: false,
-    note: 'Bank soal per topik + soal dari partner.'
-  },
+  // 'questions' TIDAK lagi menjadi menu utama (CP1 → UX refinement "quiz-first"):
+  // pembuatan soal terjadi dari dalam Quiz Editor. Halaman /questions tetap ada
+  // sebagai pustaka soal reusable dan hanya bisa dibuka lewat tautan, bukan NAV.
   {
     key: 'quiz',
     label: 'Quiz',
-    icon: '🧪',
+    icon: 'quiz',
     path: '/quiz',
     comingSoon: false,
-    note: 'Susun kuis dari bank soal: tambah, hapus, dan atur urutan soal.'
+    note: 'Pusat pembuatan kuis: tambah soal baru atau pilih soal tersimpan.'
   },
   {
     key: 'tasks',
     label: 'Tasks',
-    icon: '✅',
+    icon: 'tasks',
     path: '/tasks',
     comingSoon: true,
     note: 'Daftar tugas dan penugasan per topik.'
@@ -60,7 +55,7 @@ export const NAV = [
   {
     key: 'discuss',
     label: 'Discuss',
-    icon: '💬',
+    icon: 'discuss',
     path: '/discuss',
     comingSoon: true,
     note: 'Diskusi privat: komentar di catatan & respons per topik.'
@@ -68,7 +63,7 @@ export const NAV = [
   {
     key: 'projects',
     label: 'Projects',
-    icon: '🚀',
+    icon: 'projects',
     path: '/projects',
     comingSoon: true,
     note: 'Rekaman kemajuan project belajar bersama.'
@@ -76,7 +71,7 @@ export const NAV = [
   {
     key: 'progress',
     label: 'Progress',
-    icon: '📊',
+    icon: 'progress',
     path: '/progress',
     comingSoon: false,
     note: 'Statistik lanjutan & heatmap kontribusi.'
@@ -84,7 +79,7 @@ export const NAV = [
   {
     key: 'achievements',
     label: 'Achievements',
-    icon: '🏆',
+    icon: 'achievements',
     path: '/achievements',
     comingSoon: false,
     note: 'Badge & pencapaian belajar.'
@@ -92,7 +87,7 @@ export const NAV = [
   {
     key: 'notifications',
     label: 'Notifications',
-    icon: '🔔',
+    icon: 'notifications',
     path: '/notifications',
     comingSoon: true,
     note: 'Pemberitahuan aktivitas partner.'
@@ -100,7 +95,7 @@ export const NAV = [
   {
     key: 'settings',
     label: 'Settings',
-    icon: '⚙️',
+    icon: 'settings',
     path: '/settings',
     comingSoon: false,
     note: 'Profil, info ruang, tema, dan keamanan akun.'
@@ -113,7 +108,7 @@ export const BOTTOM_NAV_KEYS = [
   'today',
   'learn',
   'roadmap',
-  'questions',
+  'quiz',
   'tasks',
   'settings'
 ];

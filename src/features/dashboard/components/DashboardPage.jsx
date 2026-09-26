@@ -19,6 +19,29 @@ import { topicPath } from '../../topics/utils/tree';
 import { timeAgo } from '../../../shared/utils/time';
 import { statusLabel, statusTone } from '../../../shared/utils/status';
 import DashboardProgressPreview from './DashboardProgressPreview';
+import { IconGreeting } from '../../../shared/icons';
+import './../dashboard.css';
+
+// TODO Phase 2: ganti dengan IconEmptyNote / IconEmptyResource final.
+// Placeholder geometris sementara (Opsi A di spesifikasi Phase 1):
+// satu bentuk dasar yang sama untuk semua empty state Dashboard.
+function EmptyMark() {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      className="db-empty-mark"
+      aria-hidden="true"
+    >
+      <rect x="4.5" y="4.5" width="15" height="15" rx="2" strokeDasharray="3 3" />
+    </svg>
+  );
+}
 
 function greeting() {
   const h = new Date().getHours();
@@ -31,10 +54,8 @@ function greeting() {
 function NumberStat({ value, label }) {
   return (
     <div className="min-w-[96px]">
-      <div className="font-head text-[28px] leading-none text-ink">{value}</div>
-      <div className="mt-1.5 font-mono text-[10px] uppercase tracking-[.06em] text-dimmer">
-        {label}
-      </div>
+      <div className="db-num">{value}</div>
+      <div className="db-label--meta mt-1.5">{label}</div>
     </div>
   );
 }
@@ -43,17 +64,12 @@ function NumberStat({ value, label }) {
 // dengan rel=noopener. Target klik menyatu agar gaya tetap sama.
 function RowLink({ to, title, meta, badge }) {
   const external = !String(to || '').startsWith('/');
-  const className =
-    'flex min-h-[44px] items-center justify-between gap-3 border-b border-line py-2.5 transition hover:bg-bg2';
+  const className = 'db-row';
   const body = (
     <>
       <span className="min-w-0">
-        <span className="block truncate text-[13.5px] font-medium text-ink">{title}</span>
-        {meta && (
-          <span className="mt-0.5 block truncate font-mono text-[10px] uppercase tracking-[.05em] text-dimmer">
-            {meta}
-          </span>
-        )}
+        <span className="db-row-title block truncate">{title}</span>
+        {meta && <span className="db-row-meta truncate">{meta}</span>}
       </span>
       {badge}
     </>
@@ -149,16 +165,17 @@ export default function DashboardPage() {
   }, [notes, topics, uid]);
 
   return (
-    <div className="space-y-8">
-      {/* Hero: entri jurnal */}
-      <section className="card flex flex-col gap-5">
+    <div className="dashboard-root space-y-8">
+      {/* Hero: identitas ruang + sapaan */}
+      <section className="db-card">
         <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <div className="eyebrow">learning berdua · ruang {space?.name || '…'}</div>
-            <h1 className="mt-1 font-head text-[26px] leading-tight text-ink">
-              {greeting()}, {me.data?.displayName || 'kamu'} 👋
+          <div className="min-w-0">
+            <div className="db-label">Ruang belajar · {space?.name || '…'}</div>
+            <h1 className="db-title mt-1.5">
+              {greeting()}, {me.data?.displayName || 'kamu'}{' '}
+              <IconGreeting size={20} className="inline-block align-[-2px]" />
             </h1>
-            <p className="mt-1 text-[13.5px] leading-relaxed text-dim">
+            <p className="mt-2 max-w-prose text-[14.5px] leading-[1.65] text-dim">
               Ringkasan belajar berdua: catatan dan bacaanmu, aktivitas partner, dan progres
               bersama.
             </p>
@@ -166,24 +183,25 @@ export default function DashboardPage() {
           <NumberStat value={roles?.filled ? '2/2' : '1/2'} label="anggota" />
         </div>
 
-        <div className="h-[6px] w-full overflow-hidden rounded-full bg-panel2">
+        <div
+          className="db-progress-track mt-5"
+          role="img"
+          aria-label={`${fillPct}% anggota sudah terisi`}
+        >
           <div
-            className="h-full rounded-full transition-[width] duration-500 ease-out"
+            className="db-progress-fill"
             style={{
               width: `${fillPct}%`,
-              backgroundColor: roles?.filled ? 'var(--ok)' : 'var(--accent)'
+              backgroundColor: roles?.filled ? 'var(--ok)' : 'var(--db-accent)'
             }}
           />
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-5 flex flex-wrap gap-2">
           {[['me', me.data, 'Kamu'], ['partner', partner.data, 'Partner']].map(([who, p, label]) => {
             const memberUid = who === 'me' ? uid : roles?.partner;
             return (
-              <span
-                key={who}
-                className="inline-flex items-center gap-2 rounded-full border border-line bg-bg2 py-1 pl-1 pr-3"
-              >
+              <span key={who} className="db-member">
                 <Avatar name={p?.displayName || label} color={p?.color} size={26} />
                 <span className="text-[12.5px] font-medium text-ink">
                   {p?.displayName || (memberUid ? 'Memuat…' : '—')}
@@ -195,17 +213,30 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      <div className="db-sections">
       {/* Personal */}
-      <section>
-        <h2 className="section-title">Personal</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="card">
-            <div className="eyebrow mb-2">Catatan terbaru milikmu</div>
+      <section className="db-section">
+        <h2 className="db-section-title mb-3">Personal</h2>
+        <div className="grid gap-4 min-[860px]:grid-cols-2">
+          <div className="db-card">
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div className="db-label">Catatan terbaru milikmu</div>
+              {myNotes.length > 0 && (
+                <Link to="/notes/new" className="db-action">
+                  + Catatan baru
+                </Link>
+              )}
+            </div>
             {myNotes.length === 0 ? (
               <EmptyState
-                icon="📝"
+                icon={<EmptyMark />}
                 title="Belum ada catatan"
                 description="Catatan Markdown yang kamu tulis akan muncul di sini."
+                action={
+                  <Link to="/notes/new" className="db-action">
+                    + Buat catatan
+                  </Link>
+                }
               />
             ) : (
               <ul>
@@ -224,13 +255,25 @@ export default function DashboardPage() {
             )}
           </div>
 
-          <div className="card">
-            <div className="eyebrow mb-2">Resource yang sedang kamu baca</div>
+          <div className="db-card">
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div className="db-label">Resource yang sedang kamu baca</div>
+              {myReading.length > 0 && (
+                <Link to="/learn" className="db-action">
+                  Cari resource
+                </Link>
+              )}
+            </div>
             {myReading.length === 0 ? (
               <EmptyState
-                icon="▶️"
+                icon={<EmptyMark />}
                 title="Tidak ada bacaan aktif"
                 description="Resource yang kamu tandai “Sedang dibaca” akan tampil di sini."
+                action={
+                  <Link to="/learn" className="db-action">
+                    Buka Learn
+                  </Link>
+                }
               />
             ) : (
               <ul>
@@ -245,20 +288,30 @@ export default function DashboardPage() {
                 ))}
               </ul>
             )}
-            <p className="mt-3 font-mono text-[10px] uppercase tracking-[.06em] text-dimmer">
+            <p className="db-label--meta mt-3">
               {myBookmarks} catatan ditandai buku · {myNotes.length} catatan milikmu
             </p>
           </div>
         </div>
       </section>
 
+      <hr className="db-divider" />
+
       {/* Partner */}
-      <section>
-        <h2 className="section-title">Partner</h2>
-        <div className="card">
+      <section className="db-section">
+        <h2 className="db-section-title mb-3">Partner</h2>
+        <div className="db-card">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="db-label">Catatan yang dibagikan partner</div>
+            {partnerNotes.length > 0 && (
+              <Link to="/learn" className="db-action">
+                Lihat semua
+              </Link>
+            )}
+          </div>
           {partnerNotes.length === 0 ? (
             <EmptyState
-              icon="🤝"
+              icon={<EmptyMark />}
               title="Belum ada catatan shared dari partner"
               description="Catatan yang partner bagikan ke ruang ini akan tampil di sini."
             />
@@ -278,10 +331,12 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      <hr className="db-divider" />
+
       {/* Together */}
-      <section>
-        <h2 className="section-title">Together</h2>
-        <div className="card">
+      <section className="db-section">
+        <h2 className="db-section-title mb-3">Together</h2>
+        <div className="db-card">
           <div className="flex flex-wrap gap-x-10 gap-y-5">
             <NumberStat
               value={`${together.doneTopics}/${together.topics}`}
@@ -290,15 +345,19 @@ export default function DashboardPage() {
             <NumberStat value={together.notes} label="total catatan" />
             <NumberStat value={together.sharedNotes} label="catatan shared" />
           </div>
-          <p className="mt-4 text-[13px] leading-relaxed text-dim">
+          <p className="mt-4 text-[13.5px] leading-[1.65] text-dim">
             {together.notes === 0
               ? 'Belum ada materi. Mulai dari Roadmap: buat topik pertama, lalu tulis catatan.'
               : `Kalian sudah menulis ${together.notes} catatan di ruang ini, ${together.sharedNotes} di antaranya dibagikan ke dua orang.`}
           </p>
         </div>
-        <div className="mt-6">
-          <DashboardProgressPreview />
-        </div>
+      </section>
+
+      </div>
+
+      {/* Heatmap dipisah ke lebar penuh: min-width 420px tidak muat di kolom 1/3. */}
+      <section className="mt-8">
+        <DashboardProgressPreview />
       </section>
     </div>
   );

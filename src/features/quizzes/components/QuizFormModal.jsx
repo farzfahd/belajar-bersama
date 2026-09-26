@@ -46,7 +46,7 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
       return;
     }
     if (picked.length === 0) {
-      setError('Pilih minimal satu soal dari bank soal.');
+      setError('Pilih minimal satu soal tersimpan.');
       return;
     }
     setBusy(true);
@@ -77,7 +77,7 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
       onClose={onClose}
       wide
       title="Buat Quiz"
-      subtitle="Kuis menyimpan daftar soal sebagai snapshot; soal tetap hidup di bank soal."
+      subtitle="Kuis menyimpan daftar soal sebagai snapshot; soal tetap tersimpan dan bisa dipakai lagi."
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -124,7 +124,7 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
         </Select>
 
         <div className="border-t border-line pt-4">
-          <p className="section-title mb-2">Pilih soal (minimal 1)</p>
+          <p className="section-title mb-2">Pilih soal tersimpan (minimal 1)</p>
           <QuestionPicker
             questions={questions}
             topics={topics}

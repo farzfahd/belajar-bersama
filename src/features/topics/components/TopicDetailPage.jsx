@@ -1,3 +1,4 @@
+import { IconDiscuss, IconEmptyNote } from '../../../shared/icons';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -153,7 +154,7 @@ export default function TopicDetailPage() {
   if (!topic) {
     return (
       <EmptyState
-        icon="🤔"
+        icon={<IconDiscuss size={26} />}
         title="Topik tidak ditemukan"
         description="Topik ini mungkin sudah dihapus oleh salah satu anggota."
         action={<Link to="/roadmap"><Button variant="ghost">← Kembali ke Roadmap</Button></Link>}
@@ -283,7 +284,7 @@ export default function TopicDetailPage() {
         {tab === 'notes' &&
           (notesIn.length === 0 ? (
             <EmptyState
-              icon="📝"
+              icon={<IconEmptyNote size={26} />}
               title="Belum ada catatan"
               description="Catatan menempel pada topik (termasuk subtopik di dalamnya)."
               action={

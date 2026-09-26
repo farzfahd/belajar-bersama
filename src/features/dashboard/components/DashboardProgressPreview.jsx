@@ -12,20 +12,20 @@ export default function DashboardProgressPreview() {
     <section>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="eyebrow">kontribusi · snapshot</div>
-          <h2 className="section-title mb-0 mt-1">Heatmap Progress</h2>
+          <div className="db-label">Kontribusi mingguan</div>
+          <h2 className="db-section-title mt-1">Heatmap Progress</h2>
         </div>
-        <Link to="/progress" className="min-h-[44px] rounded-smc border border-line px-3 py-2 text-[12px] text-dim transition-colors hover:border-accent hover:text-accent">
+        <Link to="/progress" className="db-action">
           Buka Progress →
         </Link>
       </div>
       {error ? (
-        <p className="text-[12px] text-accent">{error}</p>
+        <p className="db-label--meta text-accent">{error}</p>
       ) : loading && !snapshot.totalItems ? (
-        <p className="text-[12px] text-dim">Memuat kontribusi…</p>
+        <p className="db-label--meta">Memuat kontribusi…</p>
       ) : (
         <>
-          <div className="mb-4 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[10px] uppercase tracking-[.06em] text-dimmer">
+          <div className="db-label--meta mb-4 flex flex-wrap gap-x-6 gap-y-1">
             <span>{snapshot.activity.length} aktivitas tercatat</span>
             <span>{snapshot.score}% materi selesai</span>
           </div>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
 import Spinner from '../../../shared/components/Spinner';
@@ -23,6 +24,7 @@ import { toErrorMessage } from '../../../shared/utils/errors';
 
 export default function QuestionBankPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const { user } = useAuthState();
   const spaceId = useSpaceId();
   const { data: space } = useSpace(spaceId);
@@ -102,10 +104,20 @@ export default function QuestionBankPage() {
       {/* Header */}
       <header className="card flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4">
         <div>
-          <div className="eyebrow">learning berdua · bank soal</div>
-          <h1 className="font-head text-2xl text-ink">❓ Question Bank</h1>
+          <div className="eyebrow">learning berdua · pustaka soal</div>
+          <h1 className="font-head text-2xl text-ink">Soal Tersimpan</h1>
           <p className="text-[13.5px] leading-relaxed text-dim">
-            Bank soal latihan per topik untuk kamu dan partner (mendukung 10 jenis soal).
+            Semua soal yang pernah dibuat, milikmu dan partner. Bisa dipakai ulang di banyak kuis.
+          </p>
+          <p className="mt-1 text-[12.5px] text-dimmer">
+            Halaman ini adalah pustaka, bukan menu utama. Soal biasanya dibuat dari dalam Quiz Editor.{' '}
+            <button
+              type="button"
+              onClick={() => navigate('/quiz')}
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              Buka Quiz
+            </button>
           </p>
         </div>
         <Button

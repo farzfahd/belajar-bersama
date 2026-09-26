@@ -1,3 +1,4 @@
+import { IconQuiz } from '../../../shared/icons';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -22,7 +23,7 @@ export default function QuizListPage() {
   const navigate = useNavigate();
   const { data: topics = [] } = useTopics(spaceId);
   const { data: quizzes = [], loading, error } = useQuizzes(spaceId);
-  // Satu listener bank soal, dipakai bersama oleh form & picker.
+  // Satu listener soal tersimpan, dipakai bersama oleh form & picker.
   const { data: questions = [], loading: questionsLoading, error: questionsError } = useQuestions(spaceId);
   const [formOpen, setFormOpen] = useState(false);
 
@@ -42,7 +43,7 @@ export default function QuizListPage() {
         <div>
           <h1 className="font-head text-2xl text-ink">Quiz</h1>
           <p className="mt-1 text-[13.5px] text-dim">
-            Kumpulan soal yang disusun dari bank soal. Setiap soal tetap berdiri sendiri di bank soal.
+            Kumpulan soal yang kamu susun. Buat soal baru atau pilih soal tersimpan, semuanya dari dalam editor kuis.
           </p>
         </div>
         <Button onClick={() => setFormOpen(true)}>＋ Buat Quiz</Button>
@@ -58,9 +59,9 @@ export default function QuizListPage() {
         </div>
       ) : quizzes.length === 0 ? (
         <EmptyState
-          icon="🧪"
+          icon={<IconQuiz size={26} />}
           title="Belum Ada Kuis"
-          description="Buat kuis pertama, lalu pilih soal dari bank soal. Kamu juga bisa membuat soal baru langsung dari editor kuis."
+          description="Buat kuis pertama, lalu tambahkan soal dari dalam editor kuis — buat baru atau pilih yang sudah tersimpan."
           action={<Button onClick={() => setFormOpen(true)}>＋ Buat Quiz</Button>}
         />
       ) : (

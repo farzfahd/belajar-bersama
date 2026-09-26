@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { BOTTOM_NAV_KEYS, navByKey, isNavItemActive } from './navConfig';
+import NavIcon from '../../shared/icons/NavIcon';
 
 // Bottom-nav mobile (<860px): 7 item utama, tetap fixed di bawah.
 export default function BottomNav() {
@@ -28,9 +29,7 @@ export default function BottomNav() {
               }`
             }
           >
-            <span aria-hidden="true" className="text-[18px] leading-none">
-              {item.icon}
-            </span>
+            <NavIcon name={item.icon} size={20} />
             <span className="font-mono text-[9px] uppercase tracking-[.05em]">
               {item.label}
             </span>

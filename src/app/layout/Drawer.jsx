@@ -3,6 +3,8 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useAuthState } from '../../features/auth/hooks/useAuthState';
 import { useProfile } from '../../features/auth/hooks/useProfile';
 import { NAV, isNavItemActive } from './navConfig';
+import NavIcon from '../../shared/icons/NavIcon';
+import { IconClose } from '../../shared/icons';
 import Avatar from '../../shared/components/Avatar';
 
 const FOCUSABLE =
@@ -103,7 +105,7 @@ export default function Drawer({ open, onClose }) {
             </div>
           </div>
            <button ref={closeRef} type="button" aria-label="Tutup menu" onClick={onClose} className="icon-btn">
-            ✕
+            <IconClose size={18} />
           </button>
         </div>
 
@@ -122,9 +124,7 @@ export default function Drawer({ open, onClose }) {
                 }`
               }
             >
-              <span aria-hidden="true" className="text-[15px]">
-                {item.icon}
-              </span>
+              <NavIcon name={item.icon} size={18} />
               <span className="truncate">{item.label}</span>
               {item.comingSoon && (
                 <span className="ml-auto font-mono text-[9px] uppercase tracking-[.08em] text-dimmer">

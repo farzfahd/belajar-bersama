@@ -23,7 +23,11 @@ export default function Layout({ spaceId, children }) {
       <Topbar spaceId={spaceId} onOpenDrawer={openDrawer} drawerOpen={drawer} />
       <Drawer open={drawer} onClose={closeDrawer} />
 
-      <div className="flex min-h-[calc(100vh-60px)] min-h-[calc(100dvh-60px)]">
+      {/* Baris konten: mengisi sisa tinggi shell (flex-1 + min-h-0) sehingga
+          main.app-main menjadi SATU scroll container. Jangan pakai
+          min-h-[calc(100dvh-60px)] lagi: itu membuat halaman tumbuh penuh
+          height dan memunculkan scrollbar kedua. */}
+      <div className="flex min-h-0 flex-1">
         <Sidebar spaceId={spaceId} />
         <main className="app-main min-w-0 flex-1">
           <div className="view-in mx-auto w-full max-w-[1100px] px-4 py-8 sm:px-6">
