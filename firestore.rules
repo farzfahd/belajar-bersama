@@ -1,0 +1,799 @@
+rules_version = '2';
+
+// ============================================================
+//  LEARNING BERDUA — Firestore Security Rules (Fase 1)
+//  Strategi: deny-by-default. Setiap allow memerlukan
+//  request.auth != null. Keanggotaan = satu-satunya kunci akses.
+//  Catatan keamanan ringkas untuk tiap bagian ada di komentar.
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- deny by default ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------- helper ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // CATATAN EMULATOR: di emulator v1.19.8, `get(path).exists` tidak
+    // berfungsi ("Property exists is undefined"); gunakan fungsi
+    // exists(path) untuk cek eksistensi + get(path).data untuk isi.
+    // Di produksi keduanya setara, jadi pola ini aman di mana pun.
+
+    // Verifikasi email WAJIB untuk pembuatan/join Space.
+    // Rule lain cukup signedIn(); keanggotaan hanya bisa tercapai
+    // lewat create/join yang mengharuskan verified().
+    function verified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Apakah request.auth.uid terdaftar di memberIds space?
+    // get() di dalam rule diizinkan walau path lain dibatasi.
+    // Ruang yang tidak ada -> error evaluasi -> deny (fail-closed).
+    function isMemberOf(spaceId) {
+      let p = /databases/$(database)/documents/spaces/$(spaceId);
+      return exists(p) && get(p).data.memberIds.hasAny([request.auth.uid]);
+    }
+
+    function isMember(spaceId) {
+      return signedIn() && isMemberOf(spaceId);
+    }
+
+    function userHasNoSpace() {
+      let p = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(p) && get(p).data.spaceId == null;
+    }
+
+    function ownsSpaceLink(spaceId) {
+      let p = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(p) && get(p).data.spaceId == spaceId;
+    }
+
+    // createSpace() mengecek keberadaan ruang milik sendiri (space_<uid>)
+    // SEBELUM membuatnya. Dokumen itu belum ada saat dicek, sehingga
+    // ownsSpaceLink() & isMemberOf() sama-sama false -> user baru tidak
+    // bisa membuat ruang sama sekali. Izinkan HANYA pembacaan dokumen yang
+    // memang belum ada, untuk id milik sendiri. Karena dokumen wajib tidak
+    // ada, tidak ada data yang bisa bocor lewat jalur ini.
+    function ownPendingSpace(spaceId) {
+      let p = /databases/$(database)/documents/spaces/$(spaceId);
+      return verified() && spaceId == 'space_' + request.auth.uid && !exists(p);
+    }
+
+    // Key yang berubah pada operasi update
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Field yang tercantum TIDAK BOLEH berubah (immutable).
+    // changed() adalah SET; pakai set.hasAny(list) — list.hasAny(set)
+    // tidak didukung.
+    function immutable(fields) {
+      return !changed().hasAny(fields);
+    }
+
+    // Hanya field yang tercantum yang boleh berubah
+    function mergedOnly(fields) {
+      return changed().hasOnly(fields);
+    }
+
+    // Tag: list, maks 20 item, unik (tanpa elemen per-item; rules tidak punya iterasi.
+    // Normalisasi lowercase/length per-item ditegakkan di client; di sini batas & keunikan saja.)
+    function validTags(t) {
+      return t is list
+        && t.size() <= 20
+        && t.toSet().size() == t.size();
+    }
+
+    // ============================================================
+    // users/{uid} — profil di root
+    // - Baca: diri sendiri (cukup signed-in, termasuk sebelum email
+    //   terverifikasi — perlu untuk layar Verify / ensureProfile),
+    //   atau sesama anggota space yang sama (saat itu sudah verified).
+    // - Tulis: hanya diri sendiri.
+    // - spaceId hanya bisa di-setting SEKALI (dari null) dan hanya ke
+    //   space yang terbukti keanggotaannya.
+    // ============================================================
+    function validUser(d) {
+      return d is map
+         && d.keys().hasAll(['displayName','avatar','color','spaceId','schemaVersion'])
+         && d.keys().hasOnly(['displayName','avatar','color','spaceId','schemaVersion'])
+        && d.displayName is string && d.displayName.size() > 0 && d.displayName.size() <= 60
+        && d.avatar is string && d.avatar.size() <= 60
+        && d.color is string && d.color.size() > 0 && d.color.size() <= 30
+         && (d.spaceId == null || (d.spaceId is string && d.spaceId.size() > 0))
+        && d.schemaVersion == 1;
+    }
+
+    function spaceIdChangeOk(d) {
+      let oldSpaceId = ('spaceId' in resource.data) ? resource.data.spaceId : null;
+      return !('spaceId' in changed())
+        || (
+          oldSpaceId != null
+          && d.spaceId == null
+          && !exists(/databases/$(database)/documents/spaces/$(oldSpaceId))
+        )
+        || (
+          oldSpaceId == null
+          && (
+            d.spaceId == null
+            || (d.spaceId is string && isMemberOf(d.spaceId))
+          )
+        );
+    }
+
+    match /users/{uid} {
+      // Profil SENDIRI: signedIn() saja (tanpa verified) — dibutuhkan
+      // Gate/VerifyScreen memuat profil sebelum email terverifikasi.
+      // Profil TEMAN satu ruang: tetap wajib verified().
+      allow get: if signedIn()
+        && (uid == request.auth.uid
+            || (verified()
+                && resource.data.spaceId is string && isMemberOf(resource.data.spaceId)));
+      allow list: if false;
+
+      allow create: if request.auth.uid == uid
+        && validUser(request.resource.data);
+
+      allow update: if request.auth.uid == uid
+        && resource.data is map
+        && validUser(request.resource.data)
+        && spaceIdChangeOk(request.resource.data);
+
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // spaces/{spaceId}
+    // - create: 1 anggota (diri sendiri), wajib terverifikasi,
+    //   user belum terikat space lain.
+    // - get: hanya anggota.
+    // - update: dua jalur —
+    //     a) anggota mengedit (rename); memberIds & createdAt
+    //        tidak boleh berubah, _joinCode hanya boleh dihapus.
+    //     b) NON-anggota bergabung via invite (canJoin): 1->2 anggota,
+    //        invite valid & belum dipakai & belum kedaluwarsa.
+    // - Setelah penuh (2 anggota) memberIds tidak bisa diubah client.
+    // ============================================================
+    function validSpace(d) {
+      return d is map
+        && d.keys().hasOnly(['name','memberIds','createdAt','schemaVersion','_joinCode'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 60
+        && d.memberIds is list
+        && d.memberIds.size() >= 1 && d.memberIds.size() <= 2
+         && d.memberIds.toSet().size() == d.memberIds.size()
+         && d.memberIds[0] is string && d.memberIds[0].size() > 0
+         && (d.memberIds.size() == 1 || (d.memberIds[1] is string && d.memberIds[1].size() > 0))
+         && d.createdAt is timestamp
+        && d.schemaVersion == 1
+        && (!('_joinCode' in d)
+            || (d._joinCode is string && d._joinCode.matches('^[A-Za-z0-9_-]{20,128}$')));
+    }
+
+    function spaceMemberUpdateOk() {
+      return (
+        mergedOnly(['name'])
+        || (mergedOnly(['_joinCode']) && !('_joinCode' in request.resource.data))
+      ) && validSpace(request.resource.data);
+    }
+
+    // Join. CATATAN KEAMANAN: `expiresAt > request.time` adalah
+    // satu-satunya pengecualikan atas aturan "tanpa request.time",
+    // karena masa berlaku invite 24 jam memang harus dicek server.
+    function canJoin(spaceId) {
+      let oldM = resource.data.memberIds;
+      let newM = request.resource.data.memberIds;
+      let code = request.resource.data._joinCode;
+      let p = /databases/$(database)/documents/invites/$(code);
+      let inv = get(p).data;
+      return !isMemberOf(spaceId)
+        && userHasNoSpace()
+        && validSpace(request.resource.data)
+        && mergedOnly(['memberIds','_joinCode'])
+        && code is string
+        && code.matches('^[A-Za-z0-9_-]{20,128}$')
+        && oldM.size() == 1
+        && newM.size() == 2
+        && newM.hasAll(oldM)
+        && newM.hasAny([request.auth.uid])
+        && !oldM.hasAny([request.auth.uid])
+        && exists(p)
+        && inv.spaceId == spaceId
+        && inv.createdBy == oldM[0]
+        && inv.used == false
+        && inv.expiresAt > request.time;
+    }
+
+    match /spaces/{spaceId} {
+      allow get: if verified()
+        && (ownsSpaceLink(spaceId) || isMemberOf(spaceId) || ownPendingSpace(spaceId));
+      allow list: if false;
+
+      allow create: if verified()
+        && request.resource.data.memberIds.hasOnly([request.auth.uid])
+        && !('_joinCode' in request.resource.data)
+        && validSpace(request.resource.data)
+        && userHasNoSpace();
+
+      allow update: if verified()
+        && ((isMemberOf(spaceId) && spaceMemberUpdateOk())
+            || canJoin(spaceId));
+
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // spaces/{spaceId}/topics — pohon roadmap.
+    // read/create/update/delete: anggota (dua-duanya boleh).
+    // createdBy & createdAt immutable.
+    // ============================================================
+    // Induk WAJIB benar-benar ada dan persis satu level di atas.
+    // - Gunakan existsAfter/getAfter (bukan exists/get) supaya batch template
+    //   Mathematics → Probability → Bayes tetap lolos: pada satu batch, get()
+    //   masih melihat keadaan SEBELUM batch, sedangkan getAfter() melihat
+    //   hasil tulisan (untuk dokumen yang tidak ikut batch, sama dengan get()).
+    // - Level hanya 0..2 dan parent harus level-1, maka siklus MUSTAHIL:
+    //   menuruni parent selalu ke level lebih rendah sampai 0 (parentId null).
+    // - d.parentId != topicId juga mencegah topik jadi induk dirinya sendiri.
+    // CATATAN: spaceId & topicId HARUS dilewatkan sebagai parameter — helper
+    // ini berada di luar blok match /spaces/{spaceId}, jadi wildcard induk
+    // tidak terlihat di sini (jika dipakai, hasil_rule = evaluation error).
+    function validParent(spaceId, d, topicId) {
+      return (d.level == 0 && d.parentId == null)
+        || (d.level >= 1
+            && d.parentId is string
+            && d.parentId.size() > 0
+            && d.parentId != topicId
+            && existsAfter(/databases/$(database)/documents/spaces/$(spaceId)/topics/$(d.parentId))
+            && getAfter(/databases/$(database)/documents/spaces/$(spaceId)/topics/$(d.parentId)).data.level == d.level - 1);
+    }
+
+    function validTopic(spaceId, d, topicId) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        && d.icon is string && d.icon.size() <= 20
+        && d.color is string && d.color.size() <= 40
+        && d.level is int && d.level >= 0 && d.level <= 2
+        && d.order is int && d.order >= 0
+        && d.status in ['not_started', 'learning', 'completed']
+        && d.difficulty in ['beginner', 'intermediate', 'advanced']
+        && validParent(spaceId, d, topicId)
+        && 'createdAt' in d && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    match /spaces/{spaceId}/topics/{topicId} {
+      allow read: if isMember(spaceId);
+
+      allow create: if isMember(spaceId) && validTopic(spaceId, request.resource.data, topicId)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isMember(spaceId) && validTopic(spaceId, request.resource.data, topicId)
+        && immutable(['createdBy', 'createdAt']);
+
+      // Aturan tidak bisa memeriksa apakah punya anak/materi tanpa query;
+      // UI wajib konfirmasi dampak sebelum menghapus.
+      allow delete: if isMember(spaceId);
+    }
+
+    // ============================================================
+    // spaces/{spaceId}/notes
+    // - read (get & list): HANYA dokumen yang terlihat ke pemirsa —
+    //   `shared` yang belum di-soft-delete, atau milik owner sendiri.
+    //   Privasi ditegakkan di RULES, bukan disembunyikan di UI.
+    // - POLA DUAL-LISTENER (WAJIB): Firestore hanya bisa membuktikan
+    //   aturan list bila field yang dicek_rules ada di where-clause.
+    //   Maka aplikasi memakai DUA listener terpisah lalu menggabungkan
+    //   hasilnya di client (lihat features/notes/hooks/useNotes.js):
+    //     1) where('visibility','==','shared') + where('deletedAt','==',null)
+    //     2) where('ownerId','==',uid)
+    //   Query tanpa batas (mis. collection('notes') polos) tidak
+    //   terbuktiRule -> tidak boleh mengembalikan dokumen private.
+    // - create/update/delete: hanya ownerId == request.auth.uid.
+    // - ownerId & createdAt immutable. commentCount di fase 3; kini 0.
+    // ============================================================
+    function validNote(d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && 'body' in d && d.body is string && d.body.size() <= 100000
+        && d.topicId is string && d.topicId.size() > 0
+        && validTags(d.tags)
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        && d.status in ['draft', 'shared', 'reviewed', 'needs_revision', 'completed']
+        && d.visibility in ['private', 'shared']
+        && d.difficulty in ['beginner', 'intermediate', 'advanced']
+        && d.commentCount is int && d.commentCount == 0
+        && (!('deletedAt' in d) || d.deletedAt == null || d.deletedAt is timestamp)
+        && 'createdAt' in d && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    // Dokumen note yang boleh dilihat uid: milik sendiri (termasuk
+    // yang di-soft-delete, untuk "Sampah") atau `shared` yang aktif.
+    // Field yang tidak ada (mis. deletedAt pada data lama) terbaca null.
+    function noteVisibleTo(n, uid) {
+      return n.ownerId == uid
+        || (n.visibility == 'shared' && n.deletedAt == null);
+    }
+
+    match /spaces/{spaceId}/notes/{noteId} {
+      // get & list memakai aturan yang sama. Untuk list, aturan ini hanya
+      // bisa dibuktikan query yang menyertakan where di atas (dual-listener).
+      allow get: if isMember(spaceId) && noteVisibleTo(resource.data, request.auth.uid);
+      allow list: if isMember(spaceId) && noteVisibleTo(resource.data, request.auth.uid);
+
+      allow create: if isMember(spaceId) && validNote(request.resource.data)
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isMember(spaceId) && validNote(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerId == request.auth.uid
+        && immutable(['ownerId', 'createdAt']);
+
+      allow delete: if isMember(spaceId)
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /spaces/{spaceId}/noteReports/{reportId} {
+      allow read: if isMember(spaceId)
+        && (resource.data.reporterId == request.auth.uid
+            || get(/databases/$(database)/documents/spaces/$(spaceId)/notes/$(resource.data.noteId)).data.ownerId == request.auth.uid);
+      allow create: if isMember(spaceId)
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.noteId is string
+        && exists(/databases/$(database)/documents/spaces/$(spaceId)/notes/$(request.resource.data.noteId))
+        && get(/databases/$(database)/documents/spaces/$(spaceId)/notes/$(request.resource.data.noteId)).data.visibility == 'shared'
+        && request.resource.data.type in ['error', 'feedback']
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 2000
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.schemaVersion == 1;
+      allow update, delete: if false;
+    }
+
+    // ============================================================
+    // spaces/{spaceId}/noteStates/{noteId_uid}
+    // State per-user: bookmark & "understood". stateId = noteId_uid.
+    // - Field `noteVisibility` = salinan visibilitas note, diverifikasi
+    //   ulang di sini lewat get() sehingga tidak bisa dipalsukan client.
+    //  gunanya: aturan read tetap bisa DIBUKTIKAN oleh query
+    //   (dual-listener, sama seperti notes) sehingga state milik partner
+    //   pada note PRIVATE tidak bisa dibaca — hanya metadata milik sendiri
+    //   dan state pada note shared.
+    // - create/update/delete: hanya kalau uid pada stateId == uid sendiri.
+    // - Tidak bisa membuat state di note yang tidak terlihat (private).
+    // ============================================================
+    function validState(d, stateId) {
+      return d.noteId is string
+        && d.uid is string
+        && d.noteVisibility in ['shared', 'private']
+        && d.bookmarked is bool
+        && d.understood is bool
+        && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    // State sah bila note-nya terlihat penulis state DAN salinan
+    // visibilitasnya cocok dengan note asli.
+    function noteStateOk(spaceId, d, uid) {
+      let p = /databases/$(database)/documents/spaces/$(spaceId)/notes/$(d.noteId);
+      let n = get(p).data;
+      return exists(p)
+        && (n.visibility == 'shared' || n.ownerId == uid)
+        && d.noteVisibility == (n.visibility == 'shared' ? 'shared' : 'private');
+    }
+
+    function stateVisibleTo(s, uid) {
+      return s.uid == uid || s.noteVisibility == 'shared';
+    }
+
+    match /spaces/{spaceId}/noteStates/{stateId} {
+      allow get: if isMember(spaceId) && stateVisibleTo(resource.data, request.auth.uid);
+      allow list: if isMember(spaceId) && stateVisibleTo(resource.data, request.auth.uid);
+
+      allow create: if isMember(spaceId)
+        && validState(request.resource.data, stateId)
+        && stateId == request.resource.data.noteId + '_' + request.auth.uid
+        && noteStateOk(spaceId, request.resource.data, request.auth.uid);
+
+      // `noteVisibility` SENGAJA boleh berubah (tidak masuk immutable):
+      // When note owner mengubah visibilitas nota (private -> shared), state
+      // miliknya harus bisa ikut diperbarui, kalau tidak toggle bookmark/
+      // "dipahami" akan ditolak permanen. Keamanannya tetap utuh karena
+      // noteStateOk() membandingkan nilainya dengan dokumen note asli, jadi
+      // client tidak bisa memalsukan nilai.
+      allow update: if isMember(spaceId)
+        && validState(request.resource.data, stateId)
+        && stateId == request.resource.data.noteId + '_' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && immutable(['uid', 'noteId'])
+        && noteStateOk(spaceId, request.resource.data, request.auth.uid);
+
+      allow delete: if isMember(spaceId)
+        && stateId == resource.data.noteId + '_' + request.auth.uid
+        && resource.data.uid == request.auth.uid;
+    }
+
+    // ============================================================
+    // spaces/{spaceId}/resources — link saja (tanpa upload file).
+    // - read (get & list): hanya `shared` atau milik addedBy sendiri.
+    //   Privasi ditegakkan di RULES (lihat catatan dual-listener pada
+    //   blok notes di atas; pola identik, field: visibility / addedBy).
+    // - create/update/delete: hanya addedBy == request.auth.uid.
+    // - addedBy & createdAt immutable. url divalidasi http/https di
+    //   RULES juga (bukan hanya client).
+    // - URL: skema http/https, TANPA whitespace, dan host harus benar-benar
+    //   ada (karakter pertama host bukan `:` / `/` / `?` / `#`), sehingga
+    //   `https://:80` atau `https://` ditolak. Case-insensitive seperti
+    //   `isHttpUrl` (client). Domain IDN non-ASCII ditolak di sini — pakai
+    //   punycode (xn--...), yang lolos.
+    // ============================================================
+    function validResource(d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && (!('author' in d) || (d.author is string && d.author.size() <= 100))
+        && d.type in ['website', 'youtube', 'book', 'pdf', 'paper', 'course',
+                      'documentation', 'dataset', 'repository', 'video',
+                      'image', 'file']
+        && d.url is string && d.url.size() > 0 && d.url.size() <= 2048
+        && d.url.matches('(?i)^https?://[A-Za-z0-9._~%][^\\s]*$')
+        && d.topicId is string && d.topicId.size() > 0
+        && (!('estimatedMinutes' in d) || (d.estimatedMinutes is int && d.estimatedMinutes >= 0))
+        && validTags(d.tags)
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        && d.visibility in ['private', 'shared']
+        && d.difficulty in ['beginner', 'intermediate', 'advanced']
+        && 'createdAt' in d && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    function resourceVisibleTo(r, uid) {
+      return r.visibility == 'shared' || r.addedBy == uid;
+    }
+
+    match /spaces/{spaceId}/resources/{resourceId} {
+      allow get: if isMember(spaceId) && resourceVisibleTo(resource.data, request.auth.uid);
+      allow list: if isMember(spaceId) && resourceVisibleTo(resource.data, request.auth.uid);
+
+      allow create: if isMember(spaceId) && validResource(request.resource.data)
+        && request.resource.data.addedBy == request.auth.uid;
+
+      allow update: if isMember(spaceId) && validResource(request.resource.data)
+        && request.resource.data.addedBy == resource.data.addedBy
+        && request.resource.data.addedBy == request.auth.uid
+        && immutable(['addedBy', 'createdAt']);
+
+      allow delete: if isMember(spaceId) && resource.data.addedBy == request.auth.uid;
+    }
+
+    // ============================================================
+    // spaces/{spaceId}/resourceStates/{resourceId_uid}
+    // Status per user (not_started | reading | completed).
+    // `resourceVisibility` = salinan visibilitas resource (diverifikasi
+    // lewat get() saat tulis) agar aturan read bisa dibuktikan query —
+    // status partner pada resource private tidak bisa dibaca.
+    // ============================================================
+    function validRState(d, stateId) {
+      return d.resourceId is string
+        && d.uid is string
+        && d.resourceVisibility in ['shared', 'private']
+        && d.status in ['not_started', 'reading', 'completed']
+        && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    function resourceStateOk(spaceId, d, uid) {
+      let p = /databases/$(database)/documents/spaces/$(spaceId)/resources/$(d.resourceId);
+      let r = get(p).data;
+      return exists(p)
+        && (r.visibility == 'shared' || r.addedBy == uid)
+        && d.resourceVisibility == (r.visibility == 'shared' ? 'shared' : 'private');
+    }
+
+    function rstateVisibleTo(s, uid) {
+      return s.uid == uid || s.resourceVisibility == 'shared';
+    }
+
+    match /spaces/{spaceId}/resourceStates/{stateId} {
+      allow get: if isMember(spaceId) && rstateVisibleTo(resource.data, request.auth.uid);
+      allow list: if isMember(spaceId) && rstateVisibleTo(resource.data, request.auth.uid);
+
+      allow create: if isMember(spaceId)
+        && validRState(request.resource.data, stateId)
+        && stateId == request.resource.data.resourceId + '_' + request.auth.uid
+        && resourceStateOk(spaceId, request.resource.data, request.auth.uid);
+
+      // `resourceVisibility` boleh berubah (sama seperti noteVisibility):
+      // harus sinkron saat resource owner mengubah visibilitas, dan
+      // resourceStateOk() tetap memverifikasinya ke dokumen resource asli.
+      allow update: if isMember(spaceId)
+        && validRState(request.resource.data, stateId)
+        && stateId == request.resource.data.resourceId + '_' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && immutable(['uid', 'resourceId'])
+        && resourceStateOk(spaceId, request.resource.data, request.auth.uid);
+
+      allow delete: if isMember(spaceId)
+        && stateId == resource.data.resourceId + '_' + request.auth.uid
+        && resource.data.uid == request.auth.uid;
+    }
+
+    // ============================================================
+    // CP3 (baru) — Quiz/Task/Progress.
+    // Koleksi baru di bawah spaces/{spaceId}: questions, quizAttempts,
+    // topicProgress, tasks, dailyPlans. Semuanya mengikuti pola yang sudah
+    // dipakai notes/resources: privasi ditegakkan di RULES, penulisan dibatasi
+    // ke owner, dan dokumen per-user memakai id komposit `< indukId>_<uid>`
+    // (konvensi yang sama dengan noteStates/resourceStates) sehingga rules
+    // bisa memverifikasi pemiliknya tanpa membaca isi id.
+    // ============================================================
+
+    // Topik boleh dikosongkan (artinya "umum", mis. task tanpa konteks),
+    // tapi kalau diisi harus benar-benar ada.
+    function topicExistsOrEmpty(spaceId, topicId) {
+      return topicId == ''
+        || exists(/databases/$(database)/documents/spaces/$(spaceId)/topics/$(topicId));
+    }
+
+    // ---------- questions (bank soal, untuk Questions & Quiz) ----------
+    // TEPAT 4 pilihan (pilihan ganda). Alasannya aturan bahasa rules tidak
+    // punya loop untuk memvalidasi tiap elemen list, jadi jumlah opsi dikunci
+    // agar indeks 0..3 bisa diperiksa satu per satu. UI wajib mengikuti.
+    function validQuestion(spaceId, d) {
+      return d.prompt is string && d.prompt.size() > 0 && d.prompt.size() <= 2000
+        && d.options is list && d.options.size() == 4
+        && d.options[0] is string && d.options[0].size() > 0 && d.options[0].size() <= 300
+        && d.options[1] is string && d.options[1].size() > 0 && d.options[1].size() <= 300
+        && d.options[2] is string && d.options[2].size() > 0 && d.options[2].size() <= 300
+        && d.options[3] is string && d.options[3].size() > 0 && d.options[3].size() <= 300
+        && d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex <= 3
+        && d.topicId is string && d.topicId.size() > 0
+        && topicExistsOrEmpty(spaceId, d.topicId)
+        && d.difficulty in ['beginner', 'intermediate', 'advanced']
+        && d.visibility in ['private', 'shared']
+        && validTags(d.tags)
+        && (!('explanation' in d) || (d.explanation is string && d.explanation.size() <= 2000))
+        && d.commentCount is int && d.commentCount == 0
+        && (!('deletedAt' in d) || d.deletedAt == null || d.deletedAt is timestamp)
+        && 'createdAt' in d && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    function questionVisibleTo(q, uid) {
+      return q.createdBy == uid
+        || (q.visibility == 'shared' && q.deletedAt == null);
+    }
+
+    match /spaces/{spaceId}/questions/{questionId} {
+      allow get: if isMember(spaceId) && questionVisibleTo(resource.data, request.auth.uid);
+      allow list: if isMember(spaceId) && questionVisibleTo(resource.data, request.auth.uid);
+
+      allow create: if isMember(spaceId) && validQuestion(spaceId, request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isMember(spaceId) && validQuestion(spaceId, request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdBy == request.auth.uid
+        && immutable(['createdBy', 'createdAt']);
+
+      allow delete: if isMember(spaceId)
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // ---------- quizAttempts (satu dokumen per pengerjaan) ----------
+    // Ditulis SEKALI saat quiz selesai (tidak ada update) sehingga skor tidak
+    // bisa dimanipulasi setelah tercatat. Terbaca oleh kedua anggota supaya
+    // skor partner terlihat langsung (sinkron live lewat onSnapshot).
+    function validAttempt(spaceId, d) {
+      return d.topicId is string && d.topicId.size() > 0
+        && topicExistsOrEmpty(spaceId, d.topicId)
+        && d.questionIds is list && d.questionIds.size() >= 1 && d.questionIds.size() <= 50
+        && d.total is int && d.total >= 1
+        && d.correct is int && d.correct >= 0 && d.correct <= d.total
+        && d.score is int && d.score >= 0 && d.score <= 100
+        && d.startedAt is timestamp && d.finishedAt is timestamp
+        && d.finishedAt >= d.startedAt
+        && d.schemaVersion == 1;
+    }
+
+    match /spaces/{spaceId}/quizAttempts/{attemptId} {
+      allow read: if isMember(spaceId);
+
+      allow create: if isMember(spaceId)
+        && validAttempt(spaceId, request.resource.data)
+        && request.resource.data.uid == request.auth.uid;
+
+      // Tidak boleh diubah/dihapus: skor adalah catatan historis.
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ---------- topicProgress (status + skor per topik per user) ----------
+    // Id dokumen = `<topicId>_<uid>`, sama seperti noteStates.
+    function validTopicProgress(d) {
+      return d.topicId is string && d.topicId.size() > 0
+        && d.uid is string
+        // status memakai kosakata yang sama dengan topics agar bisa
+        // dibandingkan langsung di UI.
+        && d.status in ['not_started', 'learning', 'completed']
+        && d.score is int && d.score >= 0 && d.score <= 100
+        && d.attempts is int && d.attempts >= 0 && d.attempts <= 9999
+        // Skor hanya boleh > 0 bila memang ada quiz yang sudah dikerjakan.
+        && (d.score == 0 || d.attempts > 0)
+        && (!('lastStudiedAt' in d) || d.lastStudiedAt == null || d.lastStudiedAt is timestamp)
+        && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    // Topik tujuan harus benar-benar ada; tanpa ini client bisa membuat
+    // progress untuk topik palsu.
+    function topicProgressOk(spaceId, d) {
+      return exists(/databases/$(database)/documents/spaces/$(spaceId)/topics/$(d.topicId));
+    }
+
+    match /spaces/{spaceId}/topicProgress/{stateId} {
+      // Kedua anggota boleh baca progress satu sama lain (belajar berdua).
+      allow read: if isMember(spaceId);
+
+      allow create: if isMember(spaceId)
+        && validTopicProgress(request.resource.data)
+        && stateId == request.resource.data.topicId + '_' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && topicProgressOk(spaceId, request.resource.data);
+
+      allow update: if isMember(spaceId)
+        && validTopicProgress(request.resource.data)
+        && stateId == request.resource.data.topicId + '_' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && immutable(['uid', 'topicId'])
+        && topicProgressOk(spaceId, request.resource.data);
+
+      allow delete: if isMember(spaceId)
+        && stateId == resource.data.topicId + '_' + request.auth.uid
+        && resource.data.uid == request.auth.uid;
+    }
+
+    // ---------- tasks (daftar tugas & penugasan) ----------
+    // CATATAN: nilai assigneeId HARUS diapit kurung. Tanpa itu operator
+    // `&&` mengikat lebih kuat dari `||` dan aturan ini bisa lolos hanya
+    // karena assigneeId == null.
+    function validTask(spaceId, d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && (!('detail' in d) || (d.detail is string && d.detail.size() <= 4000))
+        && d.topicId is string && d.topicId.size() <= 100
+        && (d.assigneeId == null || (d.assigneeId is string && d.assigneeId.size() > 0))
+        && d.status in ['todo', 'doing', 'done']
+        && d.priority in ['low', 'normal', 'high']
+        && (!('dueAt' in d) || d.dueAt == null || d.dueAt is timestamp)
+        && (!('doneAt' in d) || d.doneAt == null || d.doneAt is timestamp)
+        // Status `done` harus punya doneAt, dan sebaliknya tidak boleh
+        // menandai selesai tanpa waktu selesai.
+        && (d.status == 'done' ? (d.doneAt is timestamp) : (d.doneAt == null))
+        && topicExistsOrEmpty(spaceId, d.topicId)
+        && 'createdAt' in d && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    match /spaces/{spaceId}/tasks/{taskId} {
+      allow read: if isMember(spaceId);
+
+      allow create: if isMember(spaceId) && validTask(spaceId, request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isMember(spaceId) && validTask(spaceId, request.resource.data)
+        && immutable(['createdBy', 'createdAt'])
+        && (
+          resource.data.createdBy == request.auth.uid
+          || (
+            resource.data.assigneeId == request.auth.uid
+            && request.resource.data.assigneeId == resource.data.assigneeId
+            // Assignee hanya boleh menutup/membuka tugas. Daftar field yang
+            // WAJIB tidak berubah dipakai sebagai allow-list terbalik karena
+            // `hasOnly` tidak didukung rules emulator yang dipakai proyek ini.
+            // KONSEKUENSI: field baru di masa depan otomatis boleh diubah
+            // assignee — jadi setiap field baru di validTask() wajib ditambah
+            // ke daftar ini.
+            && !changed().hasAny([
+                 'title', 'detail', 'topicId', 'priority', 'dueAt',
+                 'assigneeId', 'createdBy', 'createdAt', 'schemaVersion'
+               ])
+          )
+        );
+
+      allow delete: if isMember(spaceId)
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // ---------- dailyPlans (rencana harian per user) ----------
+    // PRIVAT per pengguna: partner tidak boleh membaca rencana hari saya.
+    // Query di client wajib memakai where('uid','==',uid) supaya aturan read
+    // bisa dibuktikan rules.
+    // `items` = map (bukan list) berisi kunci refId -> { kind, done, title }
+    // supaya toggling tidak menulis ulang seluruh dokumen. Isi tiap entri
+    // tidak divalidasi rules (data milik sendiri; diverifikasi UI).
+    function validDailyPlan(d, stateId) {
+      return d.uid is string && d.uid.size() > 0
+        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.items is map && d.items.size() <= 30
+        && (!('note' in d) || (d.note is string && d.note.size() <= 1000))
+        && 'updatedAt' in d
+        && d.schemaVersion == 1;
+    }
+
+    match /spaces/{spaceId}/dailyPlans/{stateId} {
+      allow read: if isMember(spaceId) && resource.data.uid == request.auth.uid;
+
+      allow create: if isMember(spaceId)
+        && validDailyPlan(request.resource.data, stateId)
+        && request.resource.data.uid == request.auth.uid
+        && stateId == request.resource.data.uid + '_' + request.resource.data.date;
+
+      allow update: if isMember(spaceId)
+        && validDailyPlan(request.resource.data, stateId)
+        && request.resource.data.uid == request.auth.uid
+        && stateId == request.resource.data.uid + '_' + request.resource.data.date
+        && immutable(['uid', 'date']);
+
+      allow delete: if isMember(spaceId)
+        && resource.data.uid == request.auth.uid
+        && stateId == resource.data.uid + '_' + resource.data.date;
+    }
+
+    // ============================================================
+    // invites/{code} di ROOT.
+    // - get: user terverifikasi (dibutuhkan pemilik & join).
+    //   BATAS KEAMANAN: siapa pun yang login+verifikasi bisa membuka
+    //   invite kalau menebak kode; kode 24+ karakter acak tidak dapat
+    //   ditebak. Bagikan lewat kanal privat; kode yang bocor sebelum
+    //   dipakai bisa dipakai orang lain.
+    // - list: SELALU false.
+    // - create: hanya anggota space yang membuat invite untuk spacenya.
+    //   expiresAt dibatasi <= 24 jam via request.time (pengecualian).
+    // - update: sekalipakai — hanya flip used=false -> used=true
+    //   dengan usedBy == pengguna. Dipakai dalam batch sama dgn join.
+    // ============================================================
+    function validInvite(d) {
+      return d is map
+        && d.keys().hasOnly(['code','spaceId','spaceName','createdBy','createdAt','expiresAt','used','usedBy','usedAt','schemaVersion'])
+        && (!('code' in d) || (d.code is string && d.code.matches('^[A-Za-z0-9_-]{20,128}$')))
+        && d.spaceId is string && d.spaceId.size() > 0
+        && (!('spaceName' in d) || (d.spaceName is string && d.spaceName.size() > 0 && d.spaceName.size() <= 60))
+        && d.createdBy is string && d.createdBy.size() > 0
+        && d.createdAt is timestamp
+        && d.expiresAt is timestamp
+        && d.used is bool
+        && (d.used == false || (d.usedBy is string && d.usedAt is timestamp))
+        && (!('schemaVersion' in d) || d.schemaVersion == 1);
+    }
+
+    match /invites/{code} {
+      allow get: if verified();
+      allow list: if false;
+
+      allow create: if verified()
+        && isMemberOf(request.resource.data.spaceId)
+        && request.resource.data.keys().hasAll(['code','spaceId','spaceName','createdBy','createdAt','expiresAt','used','usedBy','usedAt','schemaVersion'])
+        && validInvite(request.resource.data)
+        && request.resource.data.code == code
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.used == false
+        && request.resource.data.spaceName == get(/databases/$(database)/documents/spaces/$(request.resource.data.spaceId)).data.name
+        && get(/databases/$(database)/documents/spaces/$(request.resource.data.spaceId)).data.memberIds.size() == 1
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(24, 'h');
+
+      allow update: if verified()
+        && validInvite(request.resource.data)
+        && resource.data.used == false
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && mergedOnly(['used','usedBy','usedAt']);
+
+      allow delete: if false;
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "demo-learning-berdua",
+    "belajar-bersama": "belajar-bersama-prod"
+  },
+  "targets": {},
+  "etags": {}
+}

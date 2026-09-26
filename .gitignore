@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+dist-ssr/
+
+# Env - jangan pernah commit nilai asli
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+UsersmmaslAppDataLocalTempopencodecdp-net.txt
+
+# Firebase
+.firebase/
+firebase-export-*/
+firebase-debug.log
+emulator-data/
+
+# Gitleaks report
+gitleaks-report.*
