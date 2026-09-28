@@ -342,20 +342,28 @@ test('auto-grading 8 tipe otomatis benar', () => {
   assert.equal(byId.q_case.needsManualGrade, false);
 });
 
-test('jawaban salah bernilai 0 dan isCorrect false', () => {
+test('jawaban salah: isCorrect false; tipe parsial dapat kredit', () => {
+  // Tipe dikotomi (single/boolean/short/numerical/matching tanpa korek)
+  // bernilai 0; tipe parsial (multiple, ordering) mendapat kredit.
   const wrong = {
     q_single: 0,
-    q_multi: [0],
+    q_multi: [0], // PGK: (c=1, w=0, K=2, N=3) → F = 0.5 → 5 poin
     q_bool: false,
     q_short: 'sintesis',
-    q_match: { a: 'salah' },
-    q_order: ['y', 'x', 'z'],
+    q_match: { a: 'salah' }, // 0 dari 1 pasangan benar → 0
+    q_order: ['y', 'x', 'z'], // 1 dari 3 posisi benar → 3.33 poin
     q_num: 99
   };
   const answers = buildAnswers(snapOf(SNAPSHOT_10), wrong);
-  for (const a of answers.filter((x) => !x.needsManualGrade && x.questionId !== 'q_case')) {
+  const byId = Object.fromEntries(answers.map((a) => [a.questionId, a]));
+  for (const a of Object.values(byId)) {
+    if (a.needsManualGrade || a.questionId === 'q_case') continue;
     assert.equal(a.isCorrect, false, `${a.questionId} salah`);
-    assert.equal(a.pointsEarned, 0, `${a.questionId} poin 0`);
+  }
+  assert.equal(byId.q_multi.pointsEarned, 5);
+  assert.equal(byId.q_order.pointsEarned, 3.33);
+  for (const id of ['q_single', 'q_bool', 'q_short', 'q_match', 'q_num']) {
+    assert.equal(byId[id].pointsEarned, 0, `${id} 0 poin`);
   }
 });
 

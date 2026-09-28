@@ -1,5 +1,38 @@
 # PROGRESS — Belajar Bersama
 
+### 2026-09-28 — Grading kontrak seragam + kredit parsial PGK γ=0.75 (Tahap 1 Fase 2)
+
+Tahap 1 Fase 2: seluruh penilaian soal menarik satu kontrak, dan soal Pilihan Ganda Kunci (PGK / multiple) mendapat kredit parsial berbasis riset Monte Carlo. Bekerja di `src/features/questions/utils/grading.js` saja; **`firestore.rules` tidak disentuh** — validasi poin di rules hanya membandingkan `answers[0].pointsEarned` dengan `==`, jadi nilai pecahan (mis. 6.67, 3.33) tetap lolos tanpa migrasi skema.
+
+**1. Kontrak grading (ditetapkan + diuji per tipe)**
+- Semua tipe mengembalikan `{ isCorrect, pointsEarned, isManual, fraction }`.
+- `fraction` = fraksi nilai F ∈ [0,1]; `pointsEarned = round2(points × fraction)` untuk tipe otomatis.
+- Tipe manual (`essay`, `code`) → `isCorrect: null`, `isManual: true`, `fraction: 0`, `pointsEarned: 0`, `status: 'pending_review'`.
+- `case_study` memakai `fraction = earnedSum / points`, menghitung sub-kredit (round2 per sub), dan menjadi `isManual` bila ada sub-soal tak ternilai.
+- Titik pembulatan tunggal `round2(value) = Math.round(value*100)/100` (rumus riset; sifat float `1.005→1` didokumentasikan di tes).
+
+**2. Kredit parsial PGK — hasil riset (artefak: `pgk-research/pgk_REPORT.md`, `pgk_stress.mjs`, `pgk_verify.mjs`, `pgk_metrics.json`, `pgk_dataset.csv`)**
+- Formula final: `F = clamp01((c/K) × (1 − γ·w/(N−K)))`, dengan `PGK_GAMMA = 0.75`, N = jumlah opsi, K = jumlah kunci, c = benar dipilih, w = salah dipilih. Guard degenerasi `K == N` (tanpa distraktor) → faktor penalti 1.
+- Validasi ekstensif: **155.683 cek / 0 gagal**, determinisme SHA-256, 113 kandidat γ, 45 pasangan N/K, 16.388 baris dataset, Pareto 56 titik. Fakta terverifikasi: `selectAll` flat **0.250** (C8), `stability` 1.000, rata-rata `guessingVsKnowing` −0.064, `blindBest` 0.3648, `knowOne` 0.4287 (= mean(1/K)). Detail lengkap di `pgk-research/pgk_REPORT.md`.
+- `sanitizeSelection` membuang duplikat & indeks di luar rentang (C7) sebelum hitung.
+- `isCorrect` PGK tetap jawaban **persis benar** (c=K, w=0); selain itu `isCorrect: false` dengan kredit parsial ≥ 0.
+
+**3. Kredit parsial tipe lain**
+- `matching`: `fraction = pasangan benar / total pasangan`.
+- `ordering`: `fraction = posisi benar / total item`.
+- `single`, `boolean`, `short_answer`, `numerical`: tetap dikotomi (0 atau penuh), tapi kini ikut kontrak `fraction`.
+
+**4. Perilaku skor lama**
+- Skor terdahulu (hasil snapshot v2) **tidak dimigrasikan**. Rumus baru berlaku untuk snapshot apa pun; `computeScore` di attempt engine tidak berubah (masih menjumlah `pointsEarned` & `manualScore`).
+
+**Verifikasi**
+- `tests/grading.test.mjs` ditulis ulang (kontrak per tipe, vektor riset §12, select-all 0.25, partial matching/ordering, case_study breakdown, round2/clamp01/sanitizeSelection).
+- `tests/attempt-engine.test.mjs` disesuaikan: tes "jawaban salah" kini membedakan tipe dikotomi (0) vs parsial (PGK `[0]` → 5 poin; ordering salah 1/3 → 3.33 poin).
+- `npm run test:units` **341/343** → dua kegagalan di `grading.test.mjs` yang ternyata **bukan bug grading**: ekspektasi `round2(1.005)` (=1, float) dan label (c,w) di tes PGK salah; diperbaiki → **pass semua**. Run terakhir `tests/grading + attempt-engine`: **61/61**.
+- `npm run build` hijau (warning bundle 1,45 MB sudah ada sejak lama).
+- `npm run test:rules` **tidak dijalankan** — `firestore.rules` tidak disentuh di sesi ini. Emulator & `npm run test:rules` tetap prosedur standar untuk langkah berikutnya.
+- **Belum:** verifikasi visual browse soal PGK dengan kredit parsial di emulator; cicilan sisa audit quiz access (production vs emulator) dari sesi sebelumnya belum dijawab.
+
 ### 2026-09-28 — Audit UI/UX: cacat kecil nyata, diperbaiki + penjaga regresi
 
 Audit lapis atas terhadap design system dan aksesibilitas yang sudah jadi. **Tidak ada perubahan skema, `firestore.rules`, atau `grading.js`**; tidak ada redesign. Semua temuan sudah dilaporkan di Phase 1 sebelum disentuh, lalu dikerjakan satu per satu dengan build/test di setiap belakang.
