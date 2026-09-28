@@ -30,7 +30,7 @@ export default function Layout({ spaceId, children }) {
       <div className="flex min-h-0 flex-1">
         <Sidebar spaceId={spaceId} />
         <main className="app-main min-w-0 flex-1">
-          <div className="view-in mx-auto w-full max-w-[1100px] px-4 py-8 sm:px-6">
+          <div className="view-in mx-auto w-full max-w-full min-[900px]:max-w-[1100px] min-[1400px]:max-w-[1320px] min-[1800px]:max-w-[1440px] px-4 py-8 sm:px-6">
             {children}
           </div>
         </main>

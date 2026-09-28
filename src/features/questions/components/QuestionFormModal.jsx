@@ -1,3 +1,4 @@
+import { IconClose } from '../../../shared/icons';
 import { useEffect, useState } from 'react';
 import Modal from '../../../shared/ui/Modal';
 import Button from '../../../shared/ui/Button';
@@ -17,6 +18,7 @@ import {
 } from '../services/questionService';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import SubQuestionEditor from './SubQuestionEditor';
+import { MatchingEditor } from './MatchingBoard';
 
 export default function QuestionFormModal({
   open,
@@ -60,6 +62,9 @@ export default function QuestionFormModal({
     { left: '', right: '' },
     { left: '', right: '' }
   ]);
+  // Draft editor penjodohhan (baris + sambungan, termasuk yang belum
+  // dipasangkan). `pairs` tetap answer key yang dipakai attempt & grading.
+  const [pairDraft, setPairDraft] = useState(null);
 
   // Tipe 7: Ordering
   const [items, setItems] = useState(['', '']);
@@ -99,6 +104,9 @@ export default function QuestionFormModal({
       setAcceptedAnswers(initialData.acceptedAnswers?.length ? initialData.acceptedAnswers : ['']);
       setSampleAnswer(initialData.sampleAnswer || '');
       setPairs(initialData.pairs?.length >= 2 ? initialData.pairs : [{ left: '', right: '' }, { left: '', right: '' }]);
+      // Draft editor penjodohhan: ikut dimuat supaya baris yang belum
+      // dipasangkan tidak hilang saat modal dibuka lagi.
+      setPairDraft(initialData.pairDraft ?? null);
       setItems(initialData.items?.length >= 2 ? initialData.items : ['', '']);
       setCorrectValue(initialData.correctValue !== undefined ? String(initialData.correctValue) : '');
       setTolerance(initialData.tolerance !== undefined ? String(initialData.tolerance) : '0');
@@ -128,6 +136,7 @@ export default function QuestionFormModal({
       setAcceptedAnswers(['']);
       setSampleAnswer('');
       setPairs([{ left: '', right: '' }, { left: '', right: '' }]);
+      setPairDraft(null);
       setItems(['', '']);
       setCorrectValue('');
       setTolerance('0');
@@ -219,6 +228,8 @@ export default function QuestionFormModal({
       acceptedAnswers: acceptedAnswers.map((a) => a.trim()).filter(Boolean),
       sampleAnswer: sampleAnswer.trim(),
       pairs,
+      // Hanya dipakai untuk tipe `matching`; tipe lain mengabaikannya.
+      pairDraft,
       items: items.map((i) => i.trim()).filter(Boolean),
       correctValue: Number(correctValue),
       tolerance: Number(tolerance) || 0,
@@ -369,7 +380,7 @@ export default function QuestionFormModal({
                       className="text-dim hover:text-accent disabled:opacity-30 p-1.5"
                       title="Hapus opsi"
                     >
-                      ✕
+                      <IconClose size={15} />
                     </button>
                   </div>
                 ))}
@@ -429,7 +440,7 @@ export default function QuestionFormModal({
                         className="text-dim hover:text-accent disabled:opacity-30 p-1.5"
                         title="Hapus opsi"
                       >
-                        ✕
+                        <IconClose size={15} />
                       </button>
                     </div>
                   );
@@ -494,7 +505,7 @@ export default function QuestionFormModal({
                         onClick={() => setAcceptedAnswers(acceptedAnswers.filter((_, i) => i !== idx))}
                         className="text-dim hover:text-accent p-1"
                       >
-                        ✕
+                        <IconClose size={14} />
                       </button>
                     )}
                   </div>
@@ -524,55 +535,16 @@ export default function QuestionFormModal({
               </div>
             )}
 
-            {/* Menjodohkan */}
+            {/* Menjodohkan - editor yang sama dengan kartu inline di kuis */}
             {type === 'matching' && (
-              <div className="space-y-2">
-                <label className="eyebrow block">Pasangan Kiri & Kanan</label>
-                {pairs.map((p, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="Item Kiri"
-                      value={p.left}
-                      onChange={(e) => {
-                        const copy = [...pairs];
-                        copy[idx] = { ...copy[idx], left: e.target.value };
-                        setPairs(copy);
-                      }}
-                      className="w-1/2 min-h-[38px] rounded-smc border border-line bg-bg2 px-3 text-[13px] text-ink"
-                    />
-                    <span className="text-dimmer">➔</span>
-                    <input
-                      type="text"
-                      placeholder="Pasangan Kanan"
-                      value={p.right}
-                      onChange={(e) => {
-                        const copy = [...pairs];
-                        copy[idx] = { ...copy[idx], right: e.target.value };
-                        setPairs(copy);
-                      }}
-                      className="w-1/2 min-h-[38px] rounded-smc border border-line bg-bg2 px-3 text-[13px] text-ink"
-                    />
-                    {pairs.length > 2 && (
-                      <button
-                        type="button"
-                        onClick={() => setPairs(pairs.filter((_, i) => i !== idx))}
-                        className="text-dim hover:text-accent"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setPairs([...pairs, { left: '', right: '' }])}
-                >
-                  ＋ Tambah Pasangan
-                </Button>
-              </div>
+              <MatchingEditor
+                pairs={pairs}
+                pairDraft={pairDraft}
+                onChange={(nextPairs, nextDraft) => {
+                  setPairs(Array.isArray(nextPairs) && nextPairs.length ? nextPairs : [{ left: '', right: '' }]);
+                  setPairDraft(nextDraft);
+                }}
+              />
             )}
 
             {/* Mengurutkan */}
@@ -599,7 +571,7 @@ export default function QuestionFormModal({
                         onClick={() => setItems(items.filter((_, i) => i !== idx))}
                         className="text-dim hover:text-accent"
                       >
-                        ✕
+                        <IconClose size={15} />
                       </button>
                     )}
                   </div>
@@ -701,7 +673,7 @@ export default function QuestionFormModal({
                 <option value="">Pilih Topik...</option>
                 {topics.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.level === 0 ? '📁 ' : t.level === 1 ? '  └─ ' : '    └─ '}
+                    {t.level === 0 ? 'Topik: ' : t.level === 1 ? '  └─ ' : '    └─ '}
                     {t.title}
                   </option>
                 ))}

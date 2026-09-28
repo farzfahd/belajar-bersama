@@ -1,3 +1,4 @@
+import { IconClose } from '../icons';
 import { useEffect, useId, useRef, useState } from 'react';
 import { normalizeTag, normalizeTags } from '../utils/validate';
 
@@ -99,7 +100,7 @@ export default function TagInput({ value = [], onChange, suggestions = [], label
               aria-label={`Hapus tag ${tag}`}
               className="text-dimmer transition hover:text-accent"
             >
-              ✕
+              <IconClose size={14} />
             </button>
           </span>
         ))}

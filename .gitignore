@@ -29,5 +29,8 @@ firebase-export-*/
 firebase-debug.log
 emulator-data/
 
+# Screenshot verifikasi visual (tests/shot-*.mjs)
+.shots/
+
 # Gitleaks report
 gitleaks-report.*

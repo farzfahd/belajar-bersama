@@ -1,5 +1,7 @@
+import { IconProgress } from '../../../shared/icons';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
 import { useProgressData } from '../hooks/useProgressData';
 import {
   ACTIVITY_TIME_ZONE,
@@ -73,21 +75,20 @@ export default function ProgressPage() {
 
   return (
     <div className="space-y-8">
-      <header className="card flex flex-col gap-2">
-        <div className="eyebrow">learning berdua · statistik</div>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="font-head text-[26px] leading-tight text-ink">Progress</h1>
-            <p className="mt-1 max-w-2xl text-[13.5px] leading-relaxed text-dim">
-              Snapshot materi dan perubahan tersimpan di ruang {space?.name || 'belajar'}. Data private
-              hanya dihitung setelah difilter untuk pengguna ini.
-            </p>
-          </div>
-          <Link to="/achievements" className="min-h-[44px] rounded-smc border border-line px-3 py-2 text-[12px] text-dim transition-colors hover:border-accent hover:text-accent">
+      <PageHeader
+        eyebrow="learning berdua · statistik"
+        icon={<IconProgress size={26} />}
+        title="Progress"
+        description={`Snapshot materi dan perubahan tersimpan di ruang ${space?.name || 'belajar'}. Data private hanya dihitung setelah difilter untuk pengguna ini.`}
+        actions={
+          <Link
+            to="/achievements"
+            className="min-h-[44px] inline-flex items-center rounded-smc border border-line px-3 py-2 text-[12px] text-dim transition-colors hover:border-accent hover:text-accent"
+          >
             Lihat achievements →
           </Link>
-        </div>
-      </header>
+        }
+      />
 
       {error && (
         <p className="rounded-smc border border-[color-mix(in_srgb,var(--accent)_38%,transparent)] px-3 py-2 text-[12px] text-accent">

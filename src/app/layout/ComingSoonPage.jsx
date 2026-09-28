@@ -1,17 +1,20 @@
+import NavIcon from '../../shared/icons/NavIcon';
 import EmptyState from '../../shared/ui/EmptyState';
+import PageHeader from './PageHeader';
 
 // Halaman placeholder untuk menu yang belum dibangun di Fase 1.
+// `item.icon` adalah kunci string dari navConfig, bukan emoji — dirender
+// lewat NavIcon supaya konsisten dengan sidebar.
 export default function ComingSoonPage({ item }) {
   return (
     <div className="space-y-6">
-      <header className="card flex flex-col gap-1">
-        <div className="eyebrow">learning berdua · fase 1</div>
-        <h1 className="font-head text-2xl text-ink">
-          {item.icon} {item.label}
-        </h1>
-      </header>
+      <PageHeader
+        eyebrow="learning berdua · fase 1"
+        icon={<NavIcon name={item.icon} size={26} />}
+        title={item.label}
+      />
       <EmptyState
-        icon={item.icon}
+        icon={<NavIcon name={item.icon} size={32} />}
         title="Segera hadir"
         description={item.note}
       />

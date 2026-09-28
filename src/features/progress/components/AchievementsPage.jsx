@@ -1,4 +1,6 @@
+import { IconAchievements } from '../../../shared/icons';
 import { Link } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
 import { useProgressData } from '../hooks/useProgressData';
 import { buildAchievements } from '../utils/progressData';
 import AchievementBadge from './AchievementBadge';
@@ -18,21 +20,20 @@ export default function AchievementsPage() {
 
   return (
     <div className="space-y-8">
-      <header className="card flex flex-col gap-2">
-        <div className="eyebrow">learning berdua · pencapaian</div>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="font-head text-[26px] leading-tight text-ink">🏆 Achievements</h1>
-            <p className="mt-1 max-w-2xl text-[13.5px] leading-relaxed text-dim">
-              Badge dihitung dari materi, status belajar, dan materi yang sudah tersimpan di
-              ruang ini.
-            </p>
-          </div>
-          <Link to="/progress" className="min-h-[44px] rounded-smc border border-line px-3 py-2 text-[12px] text-dim transition-colors hover:border-accent hover:text-accent">
+      <PageHeader
+        eyebrow="learning berdua · pencapaian"
+        icon={<IconAchievements size={26} />}
+        title="Achievements"
+        description="Badge dihitung dari materi, status belajar, dan materi yang sudah tersimpan di ruang ini."
+        actions={
+          <Link
+            to="/progress"
+            className="min-h-[44px] inline-flex items-center rounded-smc border border-line px-3 py-2 text-[12px] text-dim transition-colors hover:border-accent hover:text-accent"
+          >
             Kembali ke Progress →
           </Link>
-        </div>
-      </header>
+        }
+      />
 
       <section className="flex flex-wrap items-center gap-3 border-b border-line pb-4">
         <span className="font-head text-3xl text-ink">{unlocked}<span className="text-dimmer">/{achievements.length}</span></span>

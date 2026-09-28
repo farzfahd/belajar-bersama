@@ -1,4 +1,4 @@
-import {
+﻿import {
   collection,
   deleteDoc,
   doc,
@@ -22,7 +22,7 @@ function topicDoc(uid, input, parentId, level, order) {
     description: String(input.description || '')
       .trim()
       .slice(0, 2000),
-    icon: String(input.icon || '').trim().slice(0, 8) || '📄',
+    icon: String(input.icon || '').trim().slice(0, 8) || 'ðŸ“„',
     color: input.color || IDENTITY.defaultColor,
     parentId: parentId ?? null,
     level,
@@ -79,7 +79,7 @@ export async function setTopicOrders(spaceId, items) {
   await batch.commit();
 }
 
-// Seed template: Mathematics → Probability → Bayes.
+// Seed template: Mathematics â†’ Probability â†’ Bayes.
 // `rootOrder` dipakai saat roadmap sudah berisi topik: subject template
 // diletakkan paling akhir agar order tidak bentrok dengan order yang ada.
 export async function importTemplateRoadmap(spaceId, { rootOrder = 0 } = {}) {
@@ -95,7 +95,8 @@ export async function importTemplateRoadmap(spaceId, { rootOrder = 0 } = {}) {
   mk(mathId, {
     title: 'Mathematics',
     description: 'Bidang dasar matematika: aljabar, kalkulus, kalkulus probabilitas.',
-    icon: '📐',
+    icon: 'ðŸ“',
+    // Warna topik = personalisasi user (dari IDENTITY.colors), bukan token
     color: '#c08a6a',
     parentId: null,
     level: 0,
@@ -108,7 +109,8 @@ export async function importTemplateRoadmap(spaceId, { rootOrder = 0 } = {}) {
   mk(probId, {
     title: 'Probability',
     description: 'Pengantar peluang: ruang sampel, kejadian, dan distribusi.',
-    icon: '📊',
+    icon: 'ðŸ“Š',
+    // Warna topik = personalisasi user (dari IDENTITY.colors), bukan token
     color: '#d9a441',
     parentId: mathId,
     level: 1,
@@ -121,7 +123,8 @@ export async function importTemplateRoadmap(spaceId, { rootOrder = 0 } = {}) {
   mk(bayesId, {
     title: 'Bayes',
     description: 'Teorema Bayes, probabilitas bersyarat, dan aplikasinya.',
-    icon: '🧠',
+    icon: 'ðŸ§ ',
+    // Warna topik = personalisasi user (dari IDENTITY.colors), bukan token
     color: '#7aa89a',
     parentId: probId,
     level: 2,

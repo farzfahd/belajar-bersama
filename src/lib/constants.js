@@ -1,5 +1,16 @@
 export const SCHEMA_VERSION = 1;
 
+// Versi skema dokumen attempt (`quizzes/{quizId}/attempts/{attemptId}`).
+//
+// SENGAJA dipisah dari `SCHEMA_VERSION` dan naik ke 2: pada versi 1,
+// `questionSnapshot` hanya berisi array ID soal, sehingga attempt TIDAK
+// pernah freezes isi soal — soalnya masih dibaca live dari Question Bank.
+// Versi 2 = `questionSnapshot` memuat ISI LENGKAP tiap soal (prompt, opsi,
+// kunci jawaban, poin, penjelasan) yang disalin saat attempt dimulai.
+// Nol attempt versi 1 pernah ada di emulator saat skema ini diubah, jadi tidak
+// ada jalur kompatibilitas yang perlu dipertahankan.
+export const ATTEMPT_SCHEMA_VERSION = 2;
+
 export const ROOT = {
   users: 'users',
   spaces: 'spaces',
@@ -14,7 +25,16 @@ export const COL = {
   resourceStates: 'resourceStates',
   noteReports: 'noteReports',
   questions: 'questions',
-  quizzes: 'quizzes'
+  // Report soal disimpan sebagai SUBCOLLEKSI dari soal, jadi nilai ini adalah
+  // segmen path di bawah `questions/{questionId}` - bukan koleksi di root
+  // space. Alasannya ada di firestore.rules (owner bisa `onSnapshot` polos atas
+  // subkoleksi ini karena dokumen induknya ada di path).
+  questionReports: 'reports',
+  quizzes: 'quizzes',
+  // Subkoleksi nested di bawah quizzes/{quizId} (CP2). BERBEDA dari
+  // `quizAttempts` legacy (lihat catatan ROADMAP/ONBOARDING) yang tidak lagi
+  // dipakai dan tidak disentuh oleh CP2.
+  attempts: 'attempts'
 };
 
 export const QUESTION_TYPES = {
@@ -48,11 +68,44 @@ export const QUESTION_LIMITS = {
   maxOptions: 20
 };
 
+// Jenis report soal. Nilainya divalidasi ulang oleh Firestore Rules pada
+// `spaces/{spaceId}/questions/{questionId}/reports` - ubah di sini DAN di
+// rules bila perlu. `QUESTION_REPORT_TYPES.test.mjs` membandingkan keduanya
+// supaya tidak bisa menyimpang diam-diam.
+export const QUESTION_REPORT_TYPES = {
+  wrong_answer: 'wrong_answer',
+  typo: 'typo',
+  ambiguous: 'ambiguous',
+  duplicate: 'duplicate',
+  other: 'other'
+};
+
+export const QUESTION_REPORT_TYPE_LABELS = {
+  wrong_answer: 'Kunci Jawaban Salah',
+  typo: 'Ada Salah Ketik',
+  ambiguous: 'Soal Ambigu',
+  duplicate: 'Soal Duplikat',
+  other: 'Lainnya'
+};
+
+export const QUESTION_REPORT_LIMITS = {
+  maxMessage: 2000
+};
+
 // Batas & enum kuis (CP1 foundation). Nilai-nilai ini disalin apa adanya ke
 // `settings` pada dokumen quizzes, dan divalidasi ulang oleh Firestore Rules
 // (lihat validQuizSettings) — ubah di sini DAN di rules bila perlu.
+//
+// CATATAN CP2: `questionCount` DIHAPUS. Jumlah soal kuis = panjang
+// `questionIds` (dan `questionSnapshot` pada attempt). Sebelumnya ada field
+// `questionCount` yang rentangnya saja divalidasi (1–50) tanpa relasi ke
+// `questionIds.length`, sehingga kuis bisa menyimpan 3 soal tapi
+// `questionCount: 10` — dua sumber kebenaran yang bisa menyimpang.
 export const QUIZ_LIMITS = {
-  minQuestions: 1,
+  // 0: kuis boleh dibuat sebagai draft tanpa soal (flow "Buat Quiz → langsung
+  // masuk editor", lalu soal ditambahkan dari editor). Jumlah soal tetap
+  // `questionIds.length` — tidak ada field jumlah soal terpisah.
+  minQuestions: 0,
   maxQuestions: 50,
   maxTitle: 200,
   maxDescription: 2000,
@@ -61,7 +114,6 @@ export const QUIZ_LIMITS = {
 };
 
 export const QUIZ_SETTINGS_DEFAULTS = {
-  questionCount: 10,
   randomizeQuestionOrder: false,
   randomizeOptionOrder: false,
   timeLimitMinutes: 0,
@@ -112,7 +164,9 @@ export const STATUS_LABEL = {
 };
 
 export const IDENTITY = {
-  // Palet identitas "buku catatan": warna kalem, tetap terbaca di light & dark.
+  // Palet identitas: pilihan warna milik USER (avatar & warna topik),
+  // BUKAN token sistem. Sengaja tidak disatukan dengan skema indigo.
+  // Dipakai lewat Avatar.jsx (backgroundColor) dan kartu topik.
   colors: ['#e0704f', '#93b074', '#d9a441', '#a58a72', '#b48bb0', '#7aa89a', '#c08a6a', '#91a3c4'],
   defaultColor: '#e0704f'
 };

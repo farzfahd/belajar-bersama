@@ -1,26 +1,28 @@
 import { Navigate, useNavigate } from 'react-router-dom';
+import { IconLock, IconNotes, IconPuzzle, IconRoadmap } from '../../../shared/icons';
+
 import Button from '../../../shared/ui/Button';
 import SplashScreen from '../../../shared/components/SplashScreen';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 
 const FEATURES = [
   {
-    icon: '🗺️',
+    icon: IconRoadmap,
     label: 'Roadmap bersama',
     text: 'Pohon kurikulum 3 level dan kemajuan yang sinkron untuk berdua.'
   },
   {
-    icon: '📒',
+    icon: IconNotes,
     label: 'Catatan & sumber',
     text: 'Notes, tautan sumber, status per topik — satu tempat belajarmu.'
   },
   {
-    icon: '🧩',
+    icon: IconPuzzle,
     label: 'Berdua, bukan ramai',
     text: 'Ruang privat untuk kamu dan satu partner lewat undangan sekali pakai.'
   },
   {
-    icon: '🔒',
+    icon: IconLock,
     label: 'Data hanya untuk kalian',
     text: 'Keanggotaan ruang adalah satu-satunya kunci akses ke seluruh isinya.'
   }
@@ -73,7 +75,7 @@ export default function LandingPage() {
             {FEATURES.map((f) => (
               <div key={f.label} className="flex gap-4 border-b py-4">
                 <span className="pt-0.5 text-xl" aria-hidden="true">
-                  {f.icon}
+                  <f.icon size={22} />
                 </span>
                 <div>
                   <div className="text-[14.5px] font-semibold text-ink">{f.label}</div>

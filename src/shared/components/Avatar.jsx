@@ -1,14 +1,19 @@
 import { initialsOf } from '../utils/identity';
 
 export default function Avatar({ name = '', color, size = 36, className = '' }) {
+  // Warna identitas milik user (lihat IDENTITY.colors): nilai tengah-tengah
+  // yang enak dilihat di atas isian 13% dari dirinya sendiri saat dark, tapi di
+  // light isian itu menjadi sangat pucat dan teksnya hanya ~2:1 — gagal WCAG
+  // AA. `color-mix` dengan `--text` menjaga nuansa warna user sekaligus
+  // menggeser kontras: variabel `--text` gelap di light, terang di dark.
   const style = color
     ? {
         backgroundColor: `${color}22`,
-        color,
+        color: `color-mix(in srgb, ${color} 50%, var(--text))`,
         boxShadow: `inset 0 0 0 1px ${color}55`
       }
     : {
-        backgroundColor: 'var(--panel2)',
+        backgroundColor: 'var(--bg-elevated)',
         color: 'var(--text-dim)',
         boxShadow: 'inset 0 0 0 1px var(--border)'
       };

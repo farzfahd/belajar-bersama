@@ -1,35 +1,8 @@
+import { IconClose } from '../icons';
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { IconClose } from '../icons';
 
-const FOCUSABLE =
-  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
-
-function getFocusable(container) {
-  return Array.from(container?.querySelectorAll(FOCUSABLE) || []);
-}
-
-function trapFocus(e, container) {
-  if (e.key !== 'Tab') return;
-  const focusable = getFocusable(container);
-  if (focusable.length === 0) {
-    e.preventDefault();
-    container?.focus();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (!container.contains(document.activeElement)) {
-    e.preventDefault();
-    first.focus();
-  } else if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault();
-    first.focus();
-  }
-}
+import { getFocusable, trapFocus } from './focusTrap';
 
 export default function Modal({ open, onClose, title, subtitle, children, footer, wide = false }) {
   const dialogRef = useRef(null);
@@ -73,7 +46,7 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
   // atau membuat scrollbar ganda.
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-start justify-center bg-[rgba(26,23,20,.68)] p-4"
+      className="fixed inset-0 z-[200] flex items-start justify-center bg-[var(--scrim)] p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose?.();
       }}
@@ -87,7 +60,7 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
         tabIndex={-1}
         // my-2 + max-height berbasis 100dvh: panel tidak pernah keluar viewport;
         // hanya area konten yang bergulir, header & footer tetap terlihat.
-        className={`my-2 flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-card border border-line bg-panel p-6 shadow-card ${wide ? 'max-w-2xl' : 'max-w-md'}`}
+        className={`my-2 flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-card border border-line bg-elevated p-6 shadow-card ${wide ? 'max-w-2xl' : 'max-w-md'}`}
       >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
           <div>

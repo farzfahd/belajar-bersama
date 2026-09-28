@@ -1,5 +1,288 @@
 # PROGRESS — Belajar Bersama
 
+### 2026-09-28 — Audit UI/UX: cacat kecil nyata, diperbaiki + penjaga regresi
+
+Audit lapis atas terhadap design system dan aksesibilitas yang sudah jadi. **Tidak ada perubahan skema, `firestore.rules`, atau `grading.js`**; tidak ada redesign. Semua temuan sudah dilaporkan di Phase 1 sebelum disentuh, lalu dikerjakan satu per satu dengan build/test di setiap belakang.
+
+**1. Token yang belum ada dipakai sebagai gaya (build hijau, elemen tanpa gaya)**
+- Alias `sunken` (`--bg-sunken`) ditambahkan ke `tailwind.config.js`; sebelumnya dipakai di `Input`, `Select`, dan `QuizAttemptResultPage` tapi tidak pernah dipetakan, jadi tidak pernah menghasilkan background.
+- `--accent-solid: #4553d6` + `--on-accent: #fff` (dark & light) + util `accentsolid`/`onaccent`. Putih di atas `--accent #5b6ef5` hanya **4.21:1** (gagal WCAG AA untuk teks kecil); token baru **6.07:1**. Dipakai di tombol "Sambung" Matching dan badge jumlah filter.
+
+**2. `/opacity` pada warna yang isinya variabel CSS**
+- Sembilan pemakaian `bg-accent/12` dll. diganti pola `color-mix(in_srgb,var(--accent)_12%,transparent)` yang memang dipakai design system. Alasannya: modifier opacity menulis `color-mix` yang **tidak bisa membaca alpha dari `var()`**, jadi hasilnya tidak berlaku.
+
+**3. Kolom yang salah (a11y)**
+- `Input`/`Select`: help id dibuat dari `useId` sehingga `aria-describedby` tidak pernah menggantung; error memakai `role="alert"`; teks error sekarang benar-benar menunjuk ke input yang dimaksud.
+- **ID bentrok di Question Builder — bug nyata, ditemukan lewat render statis.** `QuestionCardDetails` dirender di dalam **setiap** kartu soal (sampai 50) dan `Input`/`Select` menurunkan id dari label saja, sehingga semua kartu memakai `field-topik`, `field-kesulitan`, `field-tag` yang sama dan setiap `<label for>` menunjuk field kartu pertama. `QuestionCardDetails` kini wajib menerima `idPrefix`, diisi `useId()` per kartu (bukan `index`, yang berubah saat reorder). Kontrol negatif pada 3 kartu: **7 id bentrok sebelum, 0 sesudah**. `QuestionAttemptForm` diperbaiki sama dengan prefix dari `question.id` (termasuk sub-soal per indeks).
+- `StatusNote` menerima `title` (dipakai `QuestionReportModal`); `Spinner` menampilkan `label` sebagai teks, bukan hanya ring.
+
+**4. Jalan buntu tanpa penjelasan**
+- `MatchingBoard`: menekan item kanan tanpa item kiri terpilih sebelumnya `return` diam — tidak ada yang berubah, tidak ada penjelasan. Di desktop masih ada jalan lain (drag), **di layar sentuh tidak ada**. `useConnectFlow` kini punya `requireLeft()` + `notice` yang dirender sebagai `StatusNote` dan dibersihkan begitu alur berjalan lagi.
+- `PageLoading` dibuat: 14 tempat loading halaman/panel memakai satu komponen, jadi `label` tidak bisa lagi hilang. `compact` memakai **prop**, bukan `className="py-8"`, karena urutan kelas CSS ditentukan Tailwind — `py-12` bawaan diam-diam mengalahkan `py-8` pemanggil (ternyata juga berlaku untuk `min-h-0` vs `min-h-[9rem]`).
+
+**5. Aksi destruktif: `window.confirm` + kegagalan yang menutup dialog**
+- Hapus akun di `SettingsPage` sekarang lewat `ConfirmDialog` dengan konsekuensi tertulis eksplisit (materi partner & ruang bersama tidak disentuh). `ConfirmDialog` menangkap kegagalan `onConfirm` dan **mempertahankan dialog terbuka** dengan pesan error — menutupnya sama dengan memberi tahu pengguna "beres" padahal tidak ada data yang berubah.
+
+**6. Penjaga regresi: `tests/ui-guard.test.mjs` (14 tes, sudah masuk `test:units`)**
+- Menahan enam kelas bug yang sudah pernah terjadi di repo: token kustom yang dipakai tapi tidak dipetakan di config, `/opacity` pada token warna, `text-white` di atas warna brand, `window.confirm`, `onClose` di dalam `catch` ConfirmDialog, dan id field yang bentrok di daftar berkali-kali. Baris komentar dilewati (komentar memang menyebut kelas yang dicari). **Sudah diuji punya gigi:** file probe sementara berhasil memicu 3 dari 4 pelanggaran, lalu dihapus.
+
+**Verifikasi:** `npm run test:units` **282/282** (dari 268; +14 penjaga baru) · `npm run test:deploy` **28/28** · `npm run build` hijau (warning bundle 1,45 MB masih ada, tidak disentuh) · render statis `QuestionCardDetails`/`QuestionAttemptForm`/`StatusNote`/`MatchingBoard`: 0 id duplikat, 0 `label for` menggantung, 0 `aria-describedby` menggantung.
+**`npm run test:rules` tidak dijalankan** — `firestore.rules` tidak disentuh di sesi ini (port 8080 kebetulan kosong, jadi bisa dijalankan bila dibutuhkan).
+**Belum:** verifikasi visual di browser (butuh emulator + `npm run dev`); `test:filter` dan `test:layout` tidak dijalankan. Perbaikan teks fixture(`Rantai makanan cadeiae早期的`) di `tests/.shot-editor-entry.jsx` — kosmetik, tanpa efek perilaku.
+
+### 2026-09-27 — CP2 refinement: submit aman, route owner/peserta, report, Matching satu-ke-satu, status warna
+
+Refinement UX atas CP2 yang sudah jadi (Attempt Engine). Tidak ada perubahan skema: `pairs` tetap `[{ left, right }]`, snapshot tetap v2, dan `questions/utils/grading.js` **tidak disentuh**.
+
+**1. Submit tanpa konfirmasi tidak sengaja, dan jawaban lokal harus selamat dari kegagalan server**
+- `QuizAttemptPage.jsx` memakai state `idle | confirm | submitting | error` + `submittingRef` (proteksi klik ganda di dalam handler, bukan hanya disable tombol). Timer tetap boleh auto-submit.
+- Dialog konfirmasi menggantikan `window.confirm`: menyebut **nomor** soal yang kosong, dan ada versi ringkas saat semua soal terisi. Halaman baru pindah ke hasil setelah submit sukses; kalau server menolak, attempt tetap `in_progress`, jawaban lokal tetap ada, dan aksi "Coba kirim lagi" tersedia.
+
+**2. Route `/quiz/:quizId` memilih tampilan sesuai pemilik**
+- `QuizRoutePage.jsx` membaca kuis sekali lalu bercabang: `createdBy === auth.uid` → `QuizEditorPage`, selain itu → `QuizParticipantPage` (metadata, daftar attempt sendiri, batas percobaan, aksi mulai/lanjutkan). Peserta tidak pernah menerima kontrol edit; proteksi rules tetap lapis kedua yang independen.
+- `useQuiz` menerima options `{ reloadKey, enabled }` (bentuk lama `reloadKey` angka tetap kompatibel) supaya halaman editor boleh memakai listener milik route tanpa dobel fetch.
+
+**3. Pelapor dari attempt dan dari review**
+- `QuestionReportModal` (yang sudah ada) dipakai ulang di `QuizAttemptPage` dan `QuizAttemptResultPage`. Peserta diberi tombol "Lapor" per soal; modal menerima snapshot question yang tetap menyimpan `question.id` asli, jadi rules (`questionVisibleTo` + bukan pemilik) bekerja seperti biasa.
+- Keterangan tetap **wajib untuk semua jenis**, termasuk `other` — sudah dipatok server (`message.size() > 0`, pola RE2 menolak whitespace-only, `is string`, ≤2000). Sisi klien: label "wajib diisi", hint muncul sebelum tombol nonaktif ditekan, dan `other` dapat hint yang lebih spesifik (warn) dengan contoh kalimat. `busy` menahan klik ganda; service tidak punya duplicate-active guard sehingga tidak dibuat sistem kedua.
+- `QuestionReportModal` dipakai untuk report dari soal hasil attempt pun dari bank soal; `QuestionDetailModal`/`SubQuestionEditor` sudah memakai semantic token yang sama.
+
+**4. Dialog konfirmasi berdesain menggantikan native confirm**
+- `ConfirmDialog` baru di `src/shared/ui/` (dipakai editor: keluarkan soal, hapus kuis; dan `QuestionBankPage`: pindahkan ke Sampah, hapus permanen — dengan konsekuensi tertulis eksplisit). `window.prompt` pada penilaian manual di halaman hasil diganti form di `ManualGradeDialog` yang sama.
+
+**5. Matching benar-benar satu-ke-satu**
+- `questions/utils/matchingPairs.js` (murni, diuji): state `{ lefts, rights, assigned }`; memberi nilai kanan yang sudah dimiliki melepas owner sebelumnya. Bug nyata ketahuan oleh tes: satu nilai kanan bisa terhubung ke dua kiri.
+- `MatchingBoard.jsx`: `MatchingEditor` (builder — drag, tap-to-connect, tombol keyboard, tambah/hapus baris, warning kalau ada pasangan belum lengkap) dan `MatchingAnswer` (attempt — kumpulan kanan diacak dengan PRNG ber-seed supaya urutan kunci tidak bocor, satu nilai hanya bisa dipakai sekali, badge benar/salah baru muncul saat review). Builder disambungkan di `QuestionCardTypeFields.jsx` dan `QuestionFormModal.jsx`; dropdown matching di `QuestionAttemptForm.jsx` diganti `MatchingAnswer`.
+
+**6. Status & warna yang punya arti**
+- `StatusNote` (tone `info`/`ok`/`warn`/`danger`) dipakai untuk state autosave, error, dan laporan. `Input`/`Select` punya `warning`/`error` + help text.
+- `QuestionCard`: "belum lengkap" kini **kuning + ikon** (bukan abu-abu), "tersimpan" hijau, "gagal menyimpan" merah, "menyimpan…" abu — semua dengan ikon supaya tidak hanya mengandalkan warna. Hint kelengkapan ikut kuning. Token baru `--ok-soft`/`--warn-soft` (dark + light) + util `oksoft`/`warnsoft`. Audit warna: tidak ada kelas palet Tailwind mentah di `src/` — hanya token di `index.css` dan warna konten (avatar/topik).
+
+**7. `findUnanswered` akhirnya benar**
+- Penanda `available`/`optional` hidup di **snapshot**, bukan di objek jawaban (dokumen `answers` tidak boleh membawa field tambahan). Versi pertama salah karena membaca `answer.available`, sehingga soal `unavailable` terhitung "belum dijawab" — dialog konfirmasi tidak pernah muncul. Signature kini `findUnanswered(answers, questionSource)`; `QuizAttemptPage` mengoper `snapshotById`. 8 tes baru (null/whitespace, `[]`/`{}`, `false`/`0`, optional, unavailable, objek biasa, input bukan array).
+
+**8. Tes & validasi**
+- `tests/matching-pairs.test.mjs` baru (19 tes) dan sudah masuk `test:units`. `attempt-engine.test.mjs` 32 → 40 tes. Rules tambah 1 blok: jenis `other` dengan keterangan sah, tanpa keterangan/whitespace-only ditolak.
+- `npm run test:units` **268/268** · `npm run test:rules` **120/120** · `npm run test:deploy` **28/28** · `npm run build` hijau. `firestore.rules` tidak diubah pada sesi refinement ini (hanya ditambahkan tesnya).
+- Belum: verifikasi manual di emulator (dark/light/mobile) dan belum ada klaim bahwa attempt schema v1 di produksi aman dimigrasikan.
+
+### 2026-09-27 — DISCREPANCY `questionSnapshot` DIPERBAIKI: snapshot berisi ISI SOAL (skema v2)
+
+Perbaikan atas entry audit di bawah ("DISCREPANCY `questionSnapshot` hanya menyimpan ID"). Ketiga requirement konsistensi attempt kini terpenuhi: kuis diubah, soal diedit, dan soal dihapus **semuanya tidak menyentuh attempt yang sudah berjalan**.
+
+**Keputusan: snapshot v2 = salinan isi soal, ditulis langsung (tanpa migrasi).** Emulator lokal diverifikasi kosong (query `spaces` via REST mengembalikan `{}`, tidak ada dokumen attempt lama), jadi tidak ada data yang perlu dimigrasikan. Skema `ATTEMPT_SCHEMA_VERSION = 2` (`src/lib/constants.js`); rules menolak `schemaVersion != 2`. **Belum diverifikasi ke produksi** — bila nanti ada attempt versi 1 di produksi, keduanya perlu handler/backfill terpisah.
+
+**Field yang disalin** — diturunkan dari pemakaian nyata di `QuestionAttemptForm.jsx` (render/review) dan `questions/utils/grading.js` (grading), bukan dari tebakan: `id`, `type`, `prompt`, `points`, `explanation`, lalu per tipe — `options`/`answerIndex`, `options`/`correctIndices`, `correctBoolean`, `acceptedAnswers`, `sampleAnswer`, `pairs`, `items`, `correctValue`/`tolerance`, `starterCode`/`expectedOutput`/`sampleSolution`, `caseText`/`subQuestions`. Field lain (`topicId`, `difficulty`, `visibility`, `tags`, `createdBy`, `deletedAt`, `commentCount`, `timeLimitSeconds`, `attachmentUrl`, `relatedNoteId`, `relatedResourceId`, `hasAnswerKey`, `schemaVersion`) sengaja tidak disalin karena tidak dibaca satu pun dari dua tempat itu — hanya memperbesar dokumen. `points` disalin sebagai nilai yang sudah final (default 10) supaya attempt lama tidak ikut berubah bila poin di bank soal diubah.
+
+**Perubahan kode**
+- `quizzes/utils/attemptEngine.js`: `buildSnapshotEntry` (whitelist per tipe + deep copy), `buildSubSnapshotEntry` (ikut menyalin `type` sub-soal), `indexSnapshot`, `resolveQuestion`, `UNAVAILABLE_TYPE`; `buildAnswers`/`gradeAnswerFor`/`computeScore` kini hanya membaca snapshot. `gradeQuestionAnswer` **tidak** disentuh.
+- `quizzes/services/quizService.js`: `startAttempt` menyimpan snapshot; `submitAttempt`/`finalizeAttempt` memakai `snapshotMap(attempt)`. Question Bank hanya dibaca di baris `startAttempt`.
+- `quizzes/components/QuizAttemptPage.jsx`: render, `setAnswer`, dan submit memakai `indexSnapshot(attempt.questionSnapshot)`. `useQuestions` hanya untuk snapshot awal — dan **menunggu `loading` selesai** (lihat bug di bawah).
+- `quizzes/components/QuizAttemptResultPage.jsx`: `useQuestions` dihapus; review murni dari snapshot.
+- `quizzes/components/QuestionAttemptForm.jsx`: kasus tepi `unavailable`.
+- `firestore.rules`: `validSnapshotEntry` memakai ulang `validQuestionTypeSpecific` apa adanya (nama field kunci identik dengan dokumen soal). Entri `unavailable` wajib `points == 0` dan **dilarang** membawa field kunci apa pun; entri soal nyata wajib `points` 1..100 dan tidak boleh menyamar `available: false`.
+
+**Tiga bug nyata yang ditemukan & diperbaiki saat pengerjaan** (semua ketahuan hanya karena kontrak snapshot diperketat):
+1. `buildSubSnapshotEntry` tidak menyalin `type` sub-soal → seluruh sub-soal studi kasus jatuh ke penilaian manual. Terlihat di tes: `case_study` dengan 2 sub otomatis seharusnya otomatis benar.
+2. Sub-soal bertipe di luar 7 tipe otomatis (tidak diizinkan `validCaseStudy`) menjadi `unavailable`, lalu dinilai `isCorrect: false, isManual: false` — **otomatis salah tanpa pernah masuk antrean manual**, jadi poin hilang tanpa jalur perbaikan. `gradeAnswerFor` kini mengalihkan seluruh soal itu ke manual. `grading.js` tidak diubah.
+3. `useQuestions` mengembalikan `[]` selagi loading, sedangkan efek `startAttempt` hanya menunggu `quiz`. Snapshot bisa tersimpan dengan **seluruh entri `unavailable`** — attempt tidak bisa dikerjakan sama sekali. Halaman ini kini menunggu `questionsLoading` selesai.
+
+**DerIVED: hanya `questionSnapshot[0]` yang divalidasi rules** (rules tidak punya loop) — limitation yang sama dengan `optionListOk`/`validCaseStudy`, sudah terdokumentasi di rules dan PROGRESS. Integritas entri lain dijaga lewat jumlah array yang wajib sama dengan `answers` + `attemptStructuralImmutable`.
+
+**Regresi A–F:** A create / B edit / C delete / D grading 10 tipe di `tests/attempt-engine.test.mjs` (32 tes, termasuk mutasi array di bank soal yang tidak boleh bocor ke snapshot); E user lain tak bisa baca/ubah snapshot + 11 bentuk snapshot salah ditolak + F partner hanya boleh field manual di `tests/firestore.rules.test.js`.
+
+**Verifikasi:** `npm run test:units` 241/241 · `npm run test:rules` 119/119 · `npm run test:deploy` 28/28 · `npm run build` hijau.
+
+**Belum dikerjakan (putusan-baiknya):** soal yang hilang **sebelum** attempt dimulai (`unavailable`) tidak bisa dipulihkan — snapshot memang tidak punya isinya; perlu alur "pilih soal lain". Skor tetap dihitung di client (limitation arsitektur CP2 yang tidak berubah).
+
+### 2026-09-27 — Audit Report Soal + snapshot attempt + privasi (tanpa perubahan kode)
+
+**Koreksi status:** brief menyebut "Report Soal: BELUM ADA". Audit repository menunjukkan fitur ini **sudah selesai terimplementasi penuh** di sesi sebelumnya (untracked, belum di-commit). Tidak ada regresi; tidak ada kode yang diubah di sesi ini.
+
+**Report Soal — perkiraan klaim vs kenyataan (VERIFIED):**
+| Komponen | Lokasi | Status |
+|---|---|---|
+| Konstanta tipe/label/limit | `src/lib/constants.js` (`QUESTION_REPORT_TYPES`, `QUESTION_REPORT_TYPE_LABELS`, `QUESTION_REPORT_LIMITS`, `COL.questionReports='reports'`) | ada |
+| Normalisasi (murni, unit-testable) | `questions/utils/questionReport.js` | ada |
+| Service tulis + listener owner | `questions/services/questionService.js` (`reportQuestion`, `subscribeQuestionReports`) | ada |
+| Hook owner-only | `questions/hooks/useQuestionReports.js` | ada |
+| Modal pelapor | `questions/components/QuestionReportModal.jsx` | ada |
+| Rules | `firestore.rules` `match /spaces/{spaceId}/questions/{questionId}/reports/{reportId}` (sekitar baris 803) | ada |
+| Rules tests emulator | `tests/firestore.rules.test.js` (4 tes `CP3/R`) | ada |
+| Unit tests | `tests/question-report.test.mjs` (19 tes) | ada |
+| Wiring pelapor | `questions/QuestionCard.jsx` (bank), `quizzes/QuestionCard.jsx` (editor, **bukan** `AddQuestionModal` yang sudah dihapus), `QuizEditorPage.jsx`, `QuestionBankPage.jsx`, `QuestionDetailModal.jsx` | ada |
+| Wiring owner (tab "Laporan") | `questions/QuestionDetailModal.jsx` (listener hanya nyala saat `tab==='reports' && isOwner`) | ada |
+
+Model keamanan: report **abadi** (`update`/`delete: if false`), hanya pemilik soal boleh `list`, pelapor hanya boleh `get` reportnya sendiri, melapor soal sendiri atau soal private partner ditolak, `type` dari daftar tetap yang sama dengan client. Pelapor sengaja **tidak** diberi daftar report (UI menjelaskan alasannya) karena `resource.data` di rule `list` membuat query polos owner ikut tak terbuktikan rules-nya — ini dibuktikan tes emulator, bukan asumsi.
+
+**DISCREPANCY (dilaporkan, tidak diperbaiki diam-diam) — `questionSnapshot` hanya menyimpan ID:**
+`buildQuestionSnapshot` (`quizzes/utils/attemptEngine.js:35`) menulis array `questionIds` saja, tanpa menyalin isi soal. Saat render & grading, `QuizAttemptPage`/`QuizAttemptResultPage` mengambil soal **live** lewat `useQuestions` → `questionById`. Akibatnya terhadap requirement "attempt tetap konsisten":
+
+| Skenario | Konsisten? | Bukti |
+|---|---|---|
+| Kuis diubah (soal ditambah/diubah urutan/dikurangi) | **YA** | Snapshot mempertahankan set + urutan ID saat attempt dimulai; perubahan `quiz.questionIds` tidak menyentuh attempt. |
+| Soal **diedit** setelah attempt dimulai | **TIDAK** | Prompt/opsi yang tampil berubah di tengah attempt, dan `gradeAnswerFor` (`attemptEngine.js:99`) menilai ulang terhadap versi **baru**. Jawaban yang user berikan berdasarkan versi lama bisa berubah benar/salah. |
+| Soal **dihapus** (soft-delete, purge, atau diubah jadi private) | **TIDAK (graceful, bukan konsisten)** | `questionById[id]` jadi `null`. Tidak crash: `QuestionAttemptForm.jsx:35` menampilkan "Soal ini tidak tersedia lagi", `blankAnswer` menandai `needsManualGrade: true` + 0 poin (`attemptEngine.js:104`), dan `computeScore` menghitung `maxScore` 0 untuk soal hilang (`attemptEngine.js:172`) sehingga attempt tidak bisa "lolos" dengan skor penuh. Hasil: attempt benar, tapi isinya hilang permanen. |
+
+Jadi 1 dari 3 requirement konsistensi **tidak terpenuhi**. Ini **bukan** sesuatu yang bisa dianggap "limitation yang wajar": akibatnya paling merusak adalah kasus edit — attempt bisa direkomputasi secara diam-diam ke nilai yang berbeda dari yang dihitung saat attempt itu dikerjakan. Memperbaikinya berarti snapshot berisi isi soal (prompt/options/kunci/points) saat attempt mulai, yang menambah ukuran dokumen attempt dan butuh penyesuaian rules. ~~**Belum dikerjakan — menunggu keputusan.**~~ **SUDAH DIPERBAIKI** — lihat entry "DISCREPANCY `questionSnapshot` DIPERBAIKI: snapshot berisi ISI SOAL (skema v2)" di atas. Tabel di bawah menggambarkan kondisi **sebelum** perbaikan.
+
+Catatan: `questionSnapshot` immutable di rules sudah mengunci riwayat attempt, jadi tidak ada yang bisa menyunting dokumentasi lama; masalahnya murni pada isi snapshot yang tidak menyimpan materi soal.
+
+**Privasi — 4 verifikasi yang diminta (SEMUA LOLOS, tanpa migration):**
+Tidak ada migration ke `notes_private`/`resources_private`. Tidak ada security gap nyata. Arsitektur aktual ternyata **berbeda dan lebih ketat** dari yang tertulis di entry M10/M12 (yang menyatakan read rule dilonggarkan jadi `isMember(spaceId)` + privasi pindah ke filter aplikasi). **Kondisi sekarang: privasi ditegakkan di RULES, dan filter aplikasi tetap ada sebagai defense-in-depth.**
+
+- `firestore.rules:364-365` → `allow get/list: if isMember(spaceId) && noteVisibleTo(resource.data, request.auth.uid);`
+- `firestore.rules:497-498` → `allow get/list: if isMember(spaceId) && resourceVisibleTo(resource.data, request.auth.uid);`
+- Helper aplikasi `notes/utils/visibility.js` & `resources/utils/visibility.js` masih dipakai di semua jalur baca (Dashboard, NotesPanel, NoteEditorPage, ResourcesPanel, RoadmapPage, TopicDetailPage, pencarian global, progressData).
+
+Bukti emulator (semua `[OK]`):
+| Verifikasi | Tes |
+|---|---|
+| private note partner tidak dapat `getDoc` | `note private: partner DITOLAK membacanya langsung (getDoc)` — `assertFails(getDoc(bob))`, `assertSucceeds(getDoc(alice))` |
+| private note partner tidak dapat `getDocs`/list | `LIST notes: query polos ditolak; dual-listener hanya mengembalikan yang boleh` — query polos ditolak untuk alice **dan** bob; dual-listener mengembalikan hanya `n_extra`,`n_shared` |
+| private resource partner tidak dapat `getDoc` | `resource private: partner DITOLAK membacanya langsung` — `assertFails(getDoc(bob))` |
+| private resource partner tidak dapat `getDocs`/list | `LIST resources: query polos ditolak; dual-listener hanya yang boleh` — query polos ditolak; branch `addedBy=='bob'` mengembalikan `[]` |
+
+Query polos ditolak (bukan disaring) justru **lebih ketat** dari sekadar "disaring" — partner tidak bisa menarik private note lewat query tanpa `where`. Yang tersisa hanya catatan emulator-vs-produksi yang sudah terdokumentasi: emulator menyaring LIST berdasarkan *rule*, bukan *query constraint*, jadi query `visibility=='shared'` milik owner ikut mengembalikan dokumen privatnya sendiri (di produksi query tetap menyaring). Ini bukan bug.
+
+**Verifikasi sesi ini (tidak ada file kode disentuh, hanya `docs/PROGRESS.md`):**
+- `npm run build` → hijau (built in 5.43s; `dist/404.html` fallback dibuat).
+- `npm run test:units` → **226/226 LULUS**, 0 gagal.
+- `npm run test:rules` → **ALL 118 TESTS PASSED** (emulator :8080 dipastikan mati dulu; baris `PERMISSION_DENIED` di log adalah output `assertFails` yang diharapkan, bukan kegagalan).
+- `npm run test:deploy` → **28/28 LULUS** (App Check = reCAPTCHA Enterprise, `VITE_ROUTER_BASENAME='/belajar-bersama'`).
+
+**Tidak disentuh:** `firestore.rules`, seluruh `src/`, legacy `quizAttempts`, keputusan `/questions` tetap `QuestionFormModal` dan `/quiz/:quizId` tetap `QuestionCard` inline. Tidak ada commit/push. Tidak ada reset/revert. Tidak ada state/database yang dihapus.
+
+**Status checkpoint:** Report Soal **SELESAI** (terverifikasi, tinggal manual test + commit). Soal Terbuka / Blind Submission **belum disentuh** — menunggu instruksi `CP3 LULUS, LANJUT CP4`.
+
+### 2026-09-27 — Quiz Editor: kartu soal jadi unit berbatas + soal baru append di bawah, tidak ada kartu yang lompat/ketutup saat save
+
+**Permintaan:** (1) tiap kartu soal harus terlihat sebagai unit terpisah dengan batas jelas dan penomoran `SOAL N` yang kuat; (2) memastikan kartu yang sedang autosave tidak bergeser, tidak menutup, tidak kehilangan isi/fokus; (3) `+ Soal Baru` dan `Dari Bank Soal` selalu append di **bawah**; (4) tombol panah & drag tetap bekerja; (5) jangan buat flow lebih rumit dari yang perlu.
+
+**Root cause "soal baru muncul di paling atas":** `QuizEditorPage` menyusun `cards` sebagai `[...newCards, ...rows]` (prepend), sementara `appendQuestionIds` menaruh id baru di **ujung** `questionIds`. Dua aturan yang bertentangan → kartu baru meloncat dari atas ke bawah tepat setelah create.
+
+**Root cause "kartu menutup / reset setelah save":** `key={row.questionId}`. Saat autosave pertama selesai, id sementara `new_…` diganti id permanen → React me-remount kartu → state `expanded` di dalam kartu ikut hilang (draft baru yang expanded mendadak menutup) dan DOM/fokus dibuat ulang.
+
+**Perbaikan (util murni di `quizQuestions.js`, diuji dengan `node --test`):**
+- `buildEditorCards(rows, newCards)` → kartu baru **selalu di belakang** baris tersimpan, dengan `position: null` + `draftIndex`. Konsekuensinya: posisi kartu sama sebelum dan sesudah create, jadi tidak ada lompatan.
+- `isDraftCardVisible(card, present)` → entry draft yang `realId`-nya sudah ada di snapshot disembunyikan, bukan dihapus. Satu soal tidak pernah tampil dua kali, dan kartu tidak pernah hilang-lahir di tengah transisi.
+- `cardKeyOf(row, draftKeyById)` → React key stabil. `draftKeyById` memetakan `id_soal → id draft`, jadi kartu yang sama hanya **diperbarui**, bukan remount, ketika id permanen masuk.
+- `moveDraftCard(...)` → kartu baru hanya bergerak di dalam blok kartu baru, pada slot yang sama di state (entri tersembunyi tidak ikut bergeser / tidak salah indeks).
+- `cardMoveBounds(row, { questionIds, draftCount })` → batas tombol panah dari sumber yang sama dengan logikanya; indeks di luar jangkauan mematikan **kedua** tombol (tidak ada tombol mati maupun tombol yang hidup tapi sia-sia).
+
+**Ketenangan saat save (`QuestionCard.jsx`):**
+- `persistedId` (state internal) menyimpan id permanen dari create pertama → save berikutnya jadi `updateQuestion`, bukan create dokumen kedua untuk soal yang sama.
+- `locallyEditedRef` + `syncedKeyRef` → begitu kartu disentuh, draft lokal jadi sumber kebenaran. Snapshot dari server hanya dipasang kalau isinya benar-benar berubah **dan** kartu belum pernah diedit. Tanpa ini, satu re-render parent (kartu lain selesai autosave) mengembalikan ketikan yang belum tersimpan.
+
+**Bentuk kartu:** `<li className="rounded-smc border border-line bg-panel px-4 py-3.5">` + `space-y-3` antar kartu. Semua token existing (`--border`, `--radius-sm` = 6px, `--bg-elevated`) — tanpa gradien/glow/shadow baru, tetap cocok untuk dark & light mode. Penomoran memakai `eyebrow` + `text-[12.5px] text-ink` (mono uppercase, label — bukan heading besar). **Catatan:** ini menyimpang dari `.card` yang sengaja flatten (garis bawah saja) — dipakai karena tiap kartu adalah unit edit mandiri, bukan elemen halaman besar; radius 6px & 1px `--border` tetap mengikuti aturan "kotak kecil".
+
+**Lain-lain:** hitungan "Daftar soal (n)" dan batas 50 sekarang memakai `jumlah kartu yang benar-benar dirender` (`cards.length`), bukan hanya `rows.length`, supaya draft yang belum tautan ikut terhitung.
+
+**File changed:** `src/features/quizzes/utils/quizQuestions.js`, `components/QuestionCard.jsx`, `components/QuizEditorPage.jsx`, `tests/quiz-editor-state.test.mjs`, `tests/.shot-stub-service.mjs` (stub create/update supaya render statis tidak pernah menyentuh Firestore).
+**Alat bantu (bukan test suite):** `tests/shot-editor-cards.mjs` + `tests/.shot-editor-entry.jsx` — render statis daftar kartu (3 tersimpan + 1 kartu baru expanded) memakai CSS hasil `npm run build`, lalu screenshot dark & light ke `.shots/editor-cards-*.png` lewat harness CDP yang sudah ada. Jalankan: `npx chrome --remote-debugging-port=9344 ...` lalu `node tests/shot-editor-cards.mjs`.
+**Tidak disentuh:** `/questions` (`QuestionBankPage`, `QuestionFormModal`), `QuestionPickerModal`, `firestore.rules`, engine grading/attempt.
+
+**Verifikasi:** `npm run build` ✅ → `npm run test:units` ✅ **207/207** (dari 180; +27: append-vs-prepend, tidak lompat setelah create, key stabil, batas panah, geser kartu draft, + guard sumber kartu) → `npm run test:deploy` ✅ 28/28. Smoke render statis `QuestionCard` 8/8 cek (kartu berbatas, `SOAL 1`, drag handle, panah up disabled di batas / down hidup, kebab, chevron). `npm run test:rules` **tidak dijalankan**: emulator Firestore sedang hidup di :8080 dan `test:rules` memakai `firebase emulators:exec` (port bentrok); `firestore.rules` tidak diubah di task ini, jadi tidak ada yang perlu diverifikasi ulang. Screenshot sudah dihasilkan tetapi **belum diperiksa visual** — perlu dilihat langsung oleh pengguna.
+
+**KNOWN LIMITATION (dicatat, bukan untuk task ini):** bila write `questionIds` gagal setelah dokumen soal berhasil dibuat, kartu tetap terlihat di bawah (dokumennya aman di bank soal) dan toast menjelaskan gagalnya; tautan ke kuis tidak dicoba ulang otomatis.
+
+### 2026-09-27 — Quiz Editor: kembalikan tombol Naik/Turun + error handling "editor gagal dibuka"
+
+**Permintaan:** (1) tombol panah Naik/Turun per kartu soal WAJIB ada lagi — "drag adalah tambahan, bukan pengganti"; (2) `/questions` (Bank Soal) **tidak** ikut redesign, `QuestionFormModal` tetap dipakai; (3) daftar tipe sub-soal studi kasus mengikuti `firestore.rules` aktual; (4) kegagalan membuka editor diperlakukan sebagai error kritis dengan aksi "Coba lagi".
+
+**Keputusan yang dipakai (semua sesuai keputusan pengguna):**
+- **Drag tetap HTML5 native**, tombol panah adalah jalur kedua ke aksi yang sama. Keduanya memanggil util yang sama, jadi tidak mungkin berbeda hasil.
+- **Bank Soal tidak disentuh.** `/quiz/:quizId` = kartu inline baru; `/questions` = wizard modal existing. `QuestionBankPage` & `QuestionFormModal` tidak diubah sama sekali.
+- **Rules adalah source of truth untuk sub-soal.** Lihat KNOWN LIMITATION di bawah.
+- **`firestore.rules` tidak diubah** untuk task ini.
+
+**Tombol panah (dipulihkan):**
+- `QuestionCard.jsx` — dua tombol ikon (`IconArrowUp` / `IconArrowDown`) tepat di samping drag handle, `aria-label="Naikkan/Turunkan soal nomor N"`, `disabled` di batas daftar (tidak ada tombol mati). Hanya tampil untuk pemilik; kartu `locked` tidak menampilkan panah maupun drag.
+- `quizQuestions.js` — ditambahkan `moveItemAt(list, index, delta)` sebagai **satu-satunya** implementasi "geser satu langkah"; `moveQuestionIdAt` sekarang membungkusnya. Dipakai juga untuk kartu baru yang belum punya id soal (hanya boleh digeser di dalam blok kartu baru — belum ada di `questionIds` sampai autosave pertama sukses).
+- `moveQuestionIdTo` (helper drag) kini benar-benar dipakai; sebelumnya diekspor tapi tidak pernah dipanggil.
+
+**Bug urutan yang ditemukan & diperbaiki (bukan permintaan langsung, tapi drag tidak akan benar tanpanya):**
+- `handleReorder` memakai indeks dari array `cards` (kartu baru selalu di depan) lalu menulis langsung ke `quiz.questionIds` → **soal yang salah tertimpa** begitu ada satu kartu baru. Sekarang indeks kartu dipetakan ke `position` (indeks di `questionIds`) dulu.
+- Kartu baru ikut diberi `questionId` placeholder (`new_...`) sehingga autosave memanggil `updateQuestion` dengan id yang tidak pernah ada. Sekarang `questionId={null}` untuk kartu baru → jalur `createQuestion` yang benar.
+
+**Error handling "Buat Quiz → editor" (fail = kritis, bukan warning):**
+- `utils/quizEditorState.js` (sebelumnya dead code) kini dipakai: `EDITOR_STATE`, `resolveQuizEditorState`, `isValidQuizId`, `isPermissionError`, plus `editorFailureMessage(state, { justCreated })` dan `canRetryEditor(state)`.
+- `useQuiz(spaceId, quizId, reloadKey)` — menambah `reloadKey` (untuk "Coba lagi") dan `errorCode` Firebase mentah supaya "akses ditolak" bisa dibedakan dari "gangguan jaringan". Data dikosongkan saat listener gagal, supaya editor kosong tidak pernah tampil seolah-olah berhasil.
+- State halaman: `loading` · `ready` · `notFound` (EmptyState "Kuis Tidak Ditemukan") · `permission` ("Akses Ditolak") · `error` ("Gagal Membuka Editor Kuis") · `retry`. Semua memakai `EmptyState` + `Button` yang sudah ada — tidak ada pola visual error baru.
+- Aksi di state gagal: **"Coba lagi"** (untuk `error`/`permission`; `notFound` sengaja tidak — mencoba lagi tidak mengubah apa pun) dan **"Buka daftar kuis"**. `quizId` dari route divalidasi lebih dulu (`isValidQuizId`) supaya id rusak tidak pernah sampai ke Firestore dan tidak menampilkan loading selamanya.
+- Pesan jujur menurut asal user: kalau datang dari "Buat Quiz" (`navigate(..., { state: { justCreated: true } })`), pesannya berakhir "jangan membuat kuis kedua"; kalau dibuka dari daftar, "cukup ulangi ... tanpa membuat kuis baru".
+- **Retry tidak pernah membuat kuis**: `QuizEditorPage` tidak mengimpor `createQuiz` sama sekali (dijaga tes). Tidak ada auto-recovery yang menghapus kuis.
+- `QuizListPage.handleCreated` memakai `shouldNavigateAfterCreate(quizId)` — navigasi hanya terjadi kalau `createQuiz` benar-benar mengembalikan `ref.id` yang valid. Tidak ada `quizId` hardcoded di mana pun; `createQuiz` tidak pernah dipanggil sebelum create sukses.
+- Tiga bug fatal yang membuat editor tidak bisa dibuka sama sekali ikut diperbaiki: `IconLibrary` (tidak pernah diimpor, tidak ada di `shared/icons`) → `IconBooks`; `emptyQuestionDraft` dipakai tanpa import; `createQuestion`/`updateQuestion` dipanggil tanpa `spaceId`.
+
+**KNOWN LIMITATION / klarifikasi spesifikasi — sub-soal studi kasus:**
+Brief awal menyebut "sub-soal tipe 1-9". Implementasi aktual hanya mengizinkan **7 tipe**: `single`, `multiple`, `boolean`, `short_answer`, `matching`, `ordering`, `numerical` (`firestore.rules` `validCaseStudy`, yang menolak `essay`, `code`, dan `case_study` — ketiganya butuh penilaian manual atau nesting). `SUB_QUESTION_TYPES` di `questionTypeFields.js` mengikuti daftar itu, dan `validCaseStudy` **tidak** dilonggarkan. Alasannya: autosave di kartu soal menulis dokumen apa adanya, jadi daftar di client wajib menghasilkan dokumen yang diterima server. Tes membandingkan `SUB_QUESTION_TYPES` dengan daftar yang dibaca langsung dari `firestore.rules`, supaya keduanya tidak bisa menyimpang diam-diam. (Catatan rules lain yang sudah ada: hanya `subQuestions[0]` yang bisa diperiksa server; validasi penuh tiap elemen tetap di client lewat `normalizeSubQuestions`.)
+
+**File changed:** `src/features/quizzes/utils/quizQuestions.js`, `utils/quizEditorState.js`, `hooks/useQuizzes.js`, `components/QuizEditorPage.jsx`, `components/QuestionCard.jsx`, `components/QuizListPage.jsx` · `tests/quiz-editor-state.test.mjs` (baru), `tests/question-card.test.mjs`, `package.json`.
+**Tidak disentuh:** `QuestionBankPage.jsx`, `QuestionFormModal.jsx`, `SubQuestionEditor.jsx`, `firestore.rules`.
+
+**Verifikasi:** `npm run build` ✅ · `npm run test:units` ✅ **180/180** (naik dari 134; +44 `quiz-editor-state`, +2 `question-card`) · `npm run test:rules` ✅ 114/114 (tidak berubah) · `npm run test:deploy` ✅ 28/28. Smoke render statis `QuestionCard` (esbuild + `renderToStaticMarkup`, di luar test suite): tombol naik/turun ada, `disabled` di batas benar, drag handle masih ada, kartu `locked` menyembunyikan keduanya.
+
+### 2026-09-27 — Perbaikan flow "Buat Quiz": draft kosong → langsung ke editor
+
+**Permintaan:** form "Buat Quiz" hanya meminta Judul/Deskripsi/Topik, lalu **langsung masuk editor**. Kuis boleh dibuat dengan `questionIds: []`; soal ditambahkan dari editor.
+
+**Audit dulu (tidak ada route/komponen duplikat):** `QuizEditorPage` di `/quiz/:quizId` **sudah** punya segalanya — metadata editable (Judul/Deskripsi/Topik di section Pengaturan), section "Daftar soal", tombol "＋ Tambah Soal" → `AddQuestionModal` → `QuestionFormModal` (existing, untuk buat soal baru) atau `QuestionPickerModal` (existing, untuk soal tersimpan), plus Naik/Turun/Remove. `handleQuestionSaved` sudah otomatis melakukan `appendQuestionIds` + `updateQuizQuestionIds`. **Tidak ada komponen/service/route baru dibuat** — hanya flow form awal yang disederhanakan.
+
+**Perubahan (5 file + 2 test):**
+- `QuizFormModal.jsx` — hapus section "Pilih soal tersimpan (minimal 1)" + `QuestionPicker` inline + guard `picked.length === 0`; `createQuiz` dipanggil dengan `questionIds: []`; tombol jadi "Buat Quiz"; `Modal` lepas `wide`; props `questions/questionsLoading/questionsError` dihapus.
+- `QuizListPage.jsx` — hapus listener `useQuestions` (menjadi tak terpakai setelah form disederhanakan).
+- `QuizEditorPage.jsx` — teks empty-state → "Belum ada soal. Buat soal pertama untuk quiz ini."; hint tombol Mulai diperjelas.
+- `quizSettings.js` (`normalizeQuestionIds`) — hapus validasi minimal-1; 0 soal kini sah.
+- `constants.js` — `QUIZ_LIMITS.minQuestions: 1 → 0`.
+- `firestore.rules` (`validQuiz`) — `questionIds.size() >= 1` → `>= 0`, dan pemeriksaan `questionIds[0]` dibungkus `size() == 0 || …` supaya tidak evaluation-error saat list kosong.
+
+**Tidak dilonggarkan:** batas atas tetap 50, duplikat tetap ditolak, `topicId` wajib + harus ada, permission tetap sama (create/update hanya `createdBy`, read `isMember`, delete hanya pembuat). `questionCount` **tidak dikembalikan** — jumlah soal tetap `questionIds.length`. Grading engine CP1 & attempt engine **tidak disentuh**.
+
+**Guard rules dibuktikan menangkap regresi:** mengembalikan `size() >= 1` → 1 FAIL (`CP1/QUIZ: snapshot questionIds`), lalu dipulihkan → 114/114.
+
+**Verifikasi:** `npm run build` ✅ · `test:units` ✅ **109/109** · `test:rules` ✅ **114/114** · `test:deploy` ✅ **28/28** · `test:attempt` ✅ **17/17**.
+
+### 2026-09-27 — CP2: Quiz Attempt Engine (pengerjaan, auto-grading, manual grading partner)
+
+**Keputusan pengguna (disetujui sebelum implementasi):**
+- **`questionCount` DIHAPUS.** Jumlah soal kuis = panjang `questionIds`; tidak ada lagi random-subset. Dihapus dari `QUIZ_SETTINGS_DEFAULTS`, `normalizeQuizSettings`, `validQuizSettings` (`hasOnly`), dan input `QuizEditorPage`. **Tidak ada migration**: diverifikasi via REST ke emulator — koleksi `quizzes` kosong, jadi tidak ada dokumen lama yang perlu dibersihkan.
+- **Manual grading: partner BOLEH menilai** (Opsi 2). Field partner dibatasi ketat di rules; `score`/`maxScore`/`scorePercent`/`passed`/`status` direcompute **oleh pemilik**.
+- **Koleksi legacy `quizAttempts` dibiarkan utuh** (di luar scope CP2, tidak konflik path dengan `quizzes/{quizId}/attempts/{attemptId}`). Tidak dipakai UI.
+
+**Skema baru:** `spaces/{spaceId}/quizzes/{quizId}/attempts/{attemptId}` — `uid`, `quizId`, `startedAt`, `completedAt`, `durationSeconds`, `questionSnapshot[]`, `answers[]` (`questionId`, `userAnswer`, `isCorrect`, `pointsEarned`, `needsManualGrade`, `manualScore`, `manualFeedback`, `gradedBy`, `gradedAt`), `score`, `maxScore`, `scorePercent`, `passed`, `status` (`in_progress`/`completed`/`pending_manual_grade`/`graded`), `schemaVersion`.
+
+**Grading:** TIDAK ada engine penilaian baru. `src/features/quizzes/utils/attemptEngine.js` mengimpor & memakai ulang `gradeQuestionAnswer` dari `src/features/questions/utils/grading.js` (CP1) untuk 10 tipe. Perilaku grading tidak diubah.
+
+**Race condition manual→recompute:** `finalizeAttempt` (owner) hanya menulis field skor/status dan **tidak menyentuh `answers`**, jadi nilai manual yang baru ditulis partner tidak pernah tertimpa. `preserveManualScores()` menjaga nilai manual tetap ada saat owner submit ulang.
+
+**Rules (`firestore.rules`, blok `attempts`):**
+- `uid`/`quizId`/`startedAt`/`questionSnapshot`/`schemaVersion` immutable.
+- Read **privat** (`resource.data.uid == auth.uid`) — berbeda dari `quizzes` induk yang shared.
+- `answers` owner boleh berubah hanya selama `in_progress`; setelah ditutup terkunci.
+- Partner: `changed().hasOnly(['answers'])` + `answerEntryStable` (menjaga `userAnswer`/`pointsEarned`/`isCorrect`/`needsManualGrade` entri indeks 0 tidak berubah) + hanya pada attempt yang sudah selesai.
+- `delete: if false`.
+- FungsiRules diberi nama `validQuizAttempt` (bukan `validAttempt`) — `validAttempt` sudah dipakai blok legacy `quizAttempts` dan rules menolak dua fungsi bernama sama.
+
+**Pola baru yang ditemukan (berguna untuk AI berikutnya):**
+1. `serverTimestamp()` **ditolak SDK di dalam array** ("serverTimestamp() is not currently supported inside arrays"). Karena `gradedAt` berada di dalam entri `answers`, dipakai `new Date()` (waktu client, bukan server).
+2. `validQuizAttempt` wajib memanggil `exists(.../quizzes/$(quizId))` — selain mencegah attempt pada kuis hantu, ini juga memberi makna pada parameter `spaceId` (rules menolak parameter tak terpakai).
+3. Field yang **tidak berubah** tidak dihitung `changed()`, jadi tes "partner tidak boleh ubah `maxScore`" harus memakai nilai yang benar-benar berbeda (mis. `999`), bukan nilai yang sudah sama.
+
+**Limitation arsitektural (dinyatakan eksplisit, bukan diklaim aman):**
+- **Skor dihitung di CLIENT (`computeScore`).** Ini BUKAN mekanisme anti-tampering setara trusted server-side grading. Yang dijaga rules hanya field struktural: `uid`/`quizId`/`startedAt`/`questionSnapshot` immutable, partner tak bisa sentuh `userAnswer`/`score`/`maxScore`. Nilai manual pun tidak terverifikasi karena partner memang diizinkan menulisnya. Klien yang sengaja memalsukan payload bisa menghasilkan skor tidak konsisten.
+- `answerEntryStable` hanya bisa membandingkan entri **indeks 0** (rules tidak punya loop). Entri jawaban lain pada array `answers` tidak dapat dibandingkan rules — hanya jumlah array-nya yang dijaga.
+- `gradedAt` memakai waktu client (`new Date()`), bukan waktu server.
+- `case_study` tanpa `subQuestions` dinilai otomatis benar penuh oleh `grading.js` CP1 — perilaku existing **tidak diubah** CP2; hanya didokumentasikan.
+- `frame-ancestors 'none'` di CSP tetap tidak efektif lewat `<meta>` (limitasi CP1, belum berubah).
+
+**File baru:** `src/features/quizzes/utils/attemptEngine.js`, `src/features/quizzes/components/QuestionAttemptForm.jsx`, `src/features/quizzes/components/QuizAttemptPage.jsx`, `src/features/quizzes/components/QuizAttemptResultPage.jsx`, `src/shared/icons/IconClock.jsx`, `tests/attempt-engine.test.mjs`.
+
+**Route:** `/quiz/:quizId/attempt` dan `/quiz/:quizId/attempt/:attemptId/result` (route hasil diletakkan sebelum `/quiz/:quizId` agar tidak tertangkap sebagai `quizId`).
+
+**Verifikasi:** `npm run build` ✅ · `npm run test:units` ✅ **109/109** (naik dari 91; +17 tes attempt engine, 1 tes `questionCount` dihapus) · `npm run test:rules` ✅ **114/114** (naik dari 108; +6 blok `CP2/ATTEMPT`).
+- Guard rules dibuktikan menangkap regresi: menghapus `attemptManualOnly()` → 1 FAIL; menghapus `attemptStructuralImmutable()` → 1 FAIL. Keduanya dipulihkan, rules final 114/114.
+
 Status umum tanggal **2026-09-26**: **Checkpoint 1–4, CP2.4 Resources, CP2.5 Heatmap/Riwayat, CP2.6 Chart/Badge, CP2.7 Tags & pencarian global, dan item CP7 Dashboard/Settings/Data SELESAI di kode**. BrowserRouter dipakai agar URL navigasi bersih, export JSON lokal, penghapusan materi pribadi + akun Auth, serta SECURITY.md sudah ditambahkan. **Checkpoint 1-A (rules bank soal) selesai; bug "Buat kode undangan" (permission-denied akibat clock-skew) diperbaiki.** **Build hijau, unit 41/41, tes rules 91/91, audit dependency produksi 0 kerentanan.** Privasi notes/resources ditegakkan server-side dengan pola dual-listener. Emulator tetap persisten (`--import/--export-on-exit` via `npm run emulators`).
 
 ## 1. Ringkasan status
@@ -29,6 +312,61 @@ Status umum tanggal **2026-09-26**: **Checkpoint 1–4, CP2.4 Resources, CP2.5 H
 Catatan penghapusan: Rules melarang penghapusan profil Firestore dan space secara client-side. Karena itu alur hanya menghapus dokumen Notes/Resources/state milik akun, melepaskan `spaceId`, lalu menghapus akun Auth; data partner dan space tidak disentuh.
 
 Catatan backlog: `noteReports` sudah menyimpan laporan pembaca secara aman, tetapi belum memiliki UI inbox. Report akan dihubungkan ke fitur Notifikasi pada fase lanjutan; sementara ini dapat diperiksa melalui Firestore Emulator UI.
+
+### 2026-09-27 — CP1: App Check + konfigurasi deploy (2 bug produksi ditemukan & diperbaiki)
+- **Temuan utama (bukan dari laporan lama — diverifikasi dari hasil build nyata):**
+  1. **CSP TIDAK PERNAH AKTIF.** `index.html` tidak punya placeholder `<!--CSP-->`, sedangkan `vite.config.js` melakukan `html.replace('<!--CSP-->', ...)`. `String.replace` diam-diam tidak mengubah apa pun bila target tidak ditemukan → **seluruh proteksi CSP yang ditulis di vite.config.js tidak pernah masuk ke build produksi**. Terbukti: `dist/index.html` hasil build lama tidak mengandung `Content-Security-Policy` sama sekali. Diperbaiki dengan menambahkan placeholder + komentar peringatan.
+  2. **Deep link GitHub Pages rusak (layar putih).** `base: './'` (relatif) membuat aset ter-reference sebagai `./assets/x.js`. GitHub Pages melayani deep link (`/learn`, `/quiz/abc`) lewat `404.html` — salinan `index.html` — sehingga `./assets/...` resolve ke `/belajar-bersama/learn/assets/...` → 404 → layar kosong. Diperbaiki: `base` kini diturunkan dari `VITE_ROUTER_BASENAME` yang sama dengan `basename` BrowserRouter (sumber kebenaran tunggal, wajib format absolut).
+- **App Check:** provider dibuat **dapat dipilih** lewat `VITE_RECAPTCHA_PROVIDER` — `v3` (default, `ReCaptchaV3Provider`, sesuai permintaan checkpoint) dan `enterprise` (`ReCaptchaEnterpriseProvider`, hasil keputusan 2026-09-26 yang tetap dipertahankan, tidak dihapus diam-diam). Keduanya tersedia di firebase 10.14.1. Mode **monitoring** ada di Firebase Console (bukan kode); kode hanya mengirim token.
+- **CSP & App Check:** `connect-src` ditambah `https://firebaseappcheck.googleapis.com` (attestation) dan `https://www.google.com/recaptcha/`; `script-src` sudah memuat `www.google.com`/`www.gstatic.com`/`www.recaptcha.net`. `frame-src` sudah ada.
+- **Debug token:** variabel ada di `.env.example` tanpa nilai; nilai asli tetap di `.env.development.local`/`.env.production.local` yang **terverifikasi tidak tracked** (`git check-ignore` + `git ls-files`).
+- **Guard regresi baru:** `tests/deploy-config-check.mjs` (`npm run test:deploy`) menjalankan build lalu memverifikasi CSP benar-benar ada di `dist/index.html` (bukan hanya tertulis di config), `404.html` terbentuk, dan path aset absolut. **Guard ini diuji dengan sengaja mengembalikan kedua bug** → keduanya tertangkap `[FAIL]` (bukan lulus diam-diam), lalu dipulihkan → **14/14 lulus**.
+- **Verifikasi build deploy:** dengan `VITE_ROUTER_BASENAME=/belajar-bersama`, aset jadi `/belajar-bersama/assets/...` (aman untuk deep link), CSP ada, `404.html` ada, dan basename ikut ter-bundle ke JS.
+- **`firestore.rules` TIDAK disentuh** — App Check bekerja di layer terpisah (verifikasi token di sisi server sebelum Rules dievaluasi), jadi tidak ada konflik. `npm run test:rules` tidak perlu dijalankan ulang.
+- **Hasil:** `npm run build` ✅ 245 modul · `npm run test:units` ✅ 91/91 · `npm run test:deploy` ✅ 14/14.
+
+### 2026-09-27 — CP0 audit privasi: rules SUDAH benar, tidak perlu restrukturisasi
+- **Laporan lama (M10/M12) sudah usang.** Rule saat ini BUKAN `allow read: if isMember(spaceId);` polos, melainkan filter **per-dokumen**: `noteVisibleTo(n, uid)` = `ownerId == uid || (visibility == 'shared' && deletedAt == null)`, dengan `get` **dan** `list` sama-sama difilter (`firestore.rules` L356-365; resource L492-497). Jadi privasi ditegakkan rules, bukan disembunyikan di UI. Tidak ada kebocoran, tidak perlu pemecahan koleksi `notes_private/{uid}/items`.
+- **Uji manual dua akun (belum pernah dilakukan sejak Fase 1) — `tests/privacy-two-account-probe.mjs` (`npm run test:privacy:accounts`): 11/11 lulus** dengan `permission-denied` asli dari Rules. Spasi uji lama ternyata **hanya beranggota 1** sehingga tidak ada partner untuk diuji → harness ini membuat ruang dua akun sendiri (daftar → verifikasi → buat ruang → kode undangan → join).
+  - B `getDoc` note private A → **ditolak**; resource private A → **ditolak**; note shared A → **boleh** (tidak over-block).
+  - B `getDocs` polos (notes & resources) → **ditolak**, bukan disaring.
+  - B dual-listener (pola yang dipakai `useNotes`) → hanya `["PUBLIK-NOTE"]`, tidak ada private.
+  - Catatan harness: `err` WAJIB persis `permission-denied` — versi awal sempat menghitung `TypeError` sebagai "privasi aman" (false positive), sudah diperketat.
+
+### 2026-09-27 — Filter terpusat: 6 dropdown deret → 1 tombol ikon + panel
+- **Keluhan:** toolbar Notes (dan Resources) menampilkan 6 dropdown sejajar yang terlalu padat; di mobile teksnya terpotong ("Semua pemi…", "Semua visibilit…").
+- **Audit (sebelum menulis kode):** pola "deretan `<Select>` dalam satu toolbar" ditemukan di **2 halaman saja** — `NotesPanel.jsx` (6 select) dan `ResourcesPanel.jsx` (4 select, hanya saat `!scopeIds`). Select lain (`NoteEditorPage`, `ResourceFormModal`, `TopicFormModal`, `QuizFormModal`, `QuizEditorPage`) adalah field **di dalam form/modal**, bukan filter daftar → **tidak tersentuh**.
+- **Komponen baru:** `src/shared/ui/FilterPanel.jsx` (satu komponen, dua tampilan sesuai breakpoint). Mobile `<860px` → bottom sheet (tinggi isi, maks 80vh, scroll internal, handle bar, header + tombol X, footer Reset/Terapkan, scroll body terkunci). Desktop `≥860px` → popover 320px di bawah tombol dengan **collision detection** (rata kiri → geser rata kanan → jepit; naik ke atas bila tidak muat di bawah), ditutup via Escape / klik luar / toggle; **tanpa** tombol "Terapkan" (popover sudah tertutup sendiri).
+- **Ikon:** `src/shared/icons/IconFilter.jsx` — corong/funnel (bukan sliders), karena `IconSettings` sudah memakai motif "tiga garis + titik" sehingga pola itu akan mudah tertukar. Aturan ikon keluarga tetap: viewBox 24×24, stroke 1.5, currentColor, cap/join round; tinggi gladly (y 4.5–19.5) agar optik sejajar dengan teks.
+- **`activeCount`:** dihitung di pemanggil; nilai selain default = aktif. `sortBy` **sengaja tidak dihitung** (urutan tampilan, bukan penyaringan data). Badge hanya muncul bila > 0.
+- **Toggle "Sampah":** tetap di toolbar (bukan di panel) — pergantian mode tampilan, bukan filter. Di bawah 520px teks disembunyikan jadi ikon + angka; nama penuh tetap ada di `aria-label`.
+- **Reuse:** logic focus trap diekstrak dari `Modal.jsx` ke `src/shared/ui/focusTrap.js` (dipakai `Modal` + `FilterPanel`), tidak diduplikasi. Animasinya lewat kelas CSS di `index.css` (`.sheet-in`, `.pop-in`) agar tunduk aturan `prefers-reduced-motion` yang sudah ada.
+- **Bug yang tertangkap saat validasi & sudah diperbaiki:**
+  1. `NavIcon`/toolbar — versi pertama toggle Sampah menampilkan **"Sampah (0) 0"** (kedua `<span>` sama-sama tampil karena `max-[520px]:hidden` + `max-[520px]:inline` tanpa kondisi awal). Diperbaiki dengan `hidden` pada span angka.
+  2. Fokus kembali ke trigger sebelumnya bergantung pada `previous` (elemen fokus sebelum panel dibuka); programmatic click tidak memindahkan fokus sehingga bisa `body`. Sekarang fokus **selalu** ke trigger.
+  3. Trigger sempat hilang dari DOM pada mode sheet sehingga tidak ada tujuan fokus kembali — trigger kini selalu ter-mount, hanya sheet-nya yang di-portal.
+- **Exit animation (ditambahkan):** panel TIDAK langsung unmount saat ditutup. State baru `closing` menahan panel di DOM sambil animasi keluar main, baru `setOpen(false)` setelah durasi habis. Konsekuensi yang harus dijaga (semuanya sudah ditangani):
+  - **Scroll lock & focus trap tetap hidup** selama animasi — keduanya terikat ke `open`, bukan ke `closing`. Kalau dilepas lebih awal, halaman di belakang sheet akan melompat ke posisi scroll lama tepat saat sheet menghilang.
+  - **Fokus kembali ke trigger** baru terjadi setelah animasi selesai (Effect-nya bergantung pada `open`), bukan saat `closing` dimulai.
+  - **Durasi JS (`DUR_SHEET` 170ms / `DUR_POP` 130ms) harus sinkron dengan CSS** (160ms / 120ms + buffer). Tidak memakai event `animationend` supaya tidak bisa menggantung bila animasi ter-skip (mis. tab tidak aktif). Konsekuensinya: kalau CSS dan JS berbeda, panel bisa berkedip sesaat sebelum hilang.
+  - `.pop-out` & `.sheet-backdrop-out` memakai `animation-fill-mode: forwards` — tanpa itu opacity kembali ke 1 tepat di frame terakhir dan panel berkedip penuh sesaat sebelum unmount.
+  - Klik trigger saat animasi keluar berjalan membatalkan animasi (toggle balik) alih-alih menumpuk animasi baru.
+  - `prefers-reduced-motion` (yang sudah ada di `index.css`) tetap dihormati: `close()` mendeteksi langsung lalu unmount seketika tanpa menunda.
+  - Durasi disimpan di `durRef` saat `close()` dipanggil, jadi pergantian breakpoint di tengah animasi tidak mengacaukan timing.
+- **Validasi:** `tests/filter-panel-check.mjs` (`npm run test:filter`) — harness CDP sendiri (helper `tests/helpers/cdp.mjs` diekstrak agar bisa dipakai `layout-align` & harness baru). **59/59 lulus**: sheet & popover, dark & light, badge, Reset tanpa menutup, Terapkan menutup, Escape/backdrop/klik-luar, scroll lock, collision detection, fokus masuk & kembali, Resources memakai komponen yang sama (4 filter), plus exit animation (terpasang, panel masih ada & bergerak saat keluar, baru unmount setelahnya).
+  - Nilai yang dibuktikan bukan cuma "keyframes terpasang": di tengah animasi popover terbaca `opacity=0.62` dan sheet terbaca `translateY=144px` — jadi benar-benar bergerak, bukan hanya punya nama animasi.
+  - 2 kegagalan awal lain ternyata **harness**, bukan aplikasi: (a) dua `setState` dalam satu evaluate di-batch React; (b) ruang uji belum punya topik/tag sehingga `setSelect` diam-diam tidak mengubah apa pun — sekarang harness memilih select yang memang punya opsi.
+- **Verifikasi:** `npm run test:filter` ✅ 59/59 · `npm run test:layout` ✅ 45/45 · `npm run build` ✅ 245 modul · `npm run test:units` ✅ 91/91. `firestore.rules` tidak disentuh.
+
+### 2026-09-27 — Alignment sidebar/header: akar masalah `inline-flex` (bukan sekadar optik)
+- **Keluhan:** "terlihat tidak sejajar masih" — ikon nav terlihat duduk lebih tinggi dari teksnya.
+- **Akar masalah (bukan soal margin):** `NavIcon` membungkus SVG dengan span `inline-flex`. Di dalam `Sidebar`, rantai elemennya `iconWrapper(flex) → colorSpan(block) → NavIconSpan(inline-flex) → svg`. Karena `inline-flex` ikut(line-box) dan duduk di atas **baseline** teks, line box menyisakan ruang descender di bawahnya — sehingga ikon 20px terdorong **2.8px ke atas**, sementara label (flex item biasa) tetap benar-benar di tengah. `items-center` + `leading-none` tidak pernah bisa menyeimbangkan keduanya; kotak ikon (pusat 162.2px) dan kotak label (pusat 165.0px) memang tidak berada di sumbu yang sama.
+- **Perbaikan:** span pembungkus `NavIcon` diubah `inline-flex` → `flex` (+ `leading-none`), sehingga tidak membentuk line box sama sekali. Sebagai flex item langsung (BottomNav/Drawer) `inline-flex` sebenarnya sudah di-blockify, jadi tidak ada perubahan perilaku di sana.
+- **`IconDiscuss`:** artwork-nya sendiri tidak berada di tengah viewBox 24×24 (ink y 4.5–18.5, pusat 11.5). Dikgeser +0.5 agar pusat tinta = 12.
+- **Metode ukur (penting):** harness sebelumnya membandingkan **pusat kotak** elemen — keduanya selalu sama tinggi & sama pusat, jadi selalu melaporkan "0.00px" padahal tidak sejajar. Harness baru `tests/layout-align.mjs` (script `npm run test:layout`) mengukur **titik pusat tinta**: ikon via `svg.getBBox()` yang dipetakan ke piksel layar, teks via `canvas TextMetrics` (baseline − tinggi kapital, dengan half-leading).
+- **Cakupan:** sidebar rail lebar (12 item) + badge "nanti", rail ciut (tinta ikon vs tengah baris), bottom-nav, drawer, PageHeader (4 halaman), tombol ikon topbar.
+- **Hasil:** **45/45 lulus**, toleransi |Δ| ≤ 0.6px. Sebelumnya 25 gagal dengan worst-case **+3.71px**; kini worst-case **+0.6px** dan sebagian besar 0.00px.
+- **Verifikasi:** `npm run test:layout` ✅ 45/45 · `npm run build` ✅ 242 modul · `npm run test:units` ✅ 91/91. `firestore.rules` tidak disentuh → `test:rules` tidak perlu dijalankan ulang.
 
 ### 2026-09-26 — Audit keamanan dan kesiapan deploy
 - Audit konfigurasi produksi menemukan `.env.production.local` terisi dan `VITE_USE_EMULATORS=false`; nilai lokal tetap tidak dilacak Git.

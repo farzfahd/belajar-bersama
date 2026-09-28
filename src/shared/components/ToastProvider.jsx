@@ -1,3 +1,4 @@
+import { IconCheck, IconClose, IconQuestion, IconWarn } from '../icons';
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
 
 const ToastCtx = createContext(null);
@@ -49,7 +50,13 @@ export function ToastProvider({ children }) {
             data-tone={t.type}
           >
             <span aria-hidden="true">
-              {t.type === 'success' ? '✅' : t.type === 'error' ? '⚠️' : '💡'}
+              {t.type === 'success' ? (
+                <IconCheck size={17} />
+              ) : t.type === 'error' ? (
+                <IconWarn size={17} />
+              ) : (
+                <IconQuestion size={17} />
+              )}
             </span>
             <span className="text-ink">{t.message}</span>
             <button
@@ -58,7 +65,7 @@ export function ToastProvider({ children }) {
               onClick={() => dismiss(t.id)}
                className="flex h-11 w-11 items-center justify-center text-dim hover:text-ink transition-colors"
             >
-              ✕
+              <IconClose size={16} />
             </button>
           </div>
         ))}

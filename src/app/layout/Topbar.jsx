@@ -1,3 +1,4 @@
+import { IconMenu, IconSearch, IconThemeDark, IconThemeLight } from '../../shared/icons';
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../providers';
@@ -8,7 +9,6 @@ import { useSpace } from '../../features/space/hooks/useSpace';
 import { navByPath } from './navConfig';
 import Avatar from '../../shared/components/Avatar';
 import GlobalSearchDialog from '../../features/search/components/GlobalSearchDialog';
-import { IconMenu, IconSearch, IconThemeDark, IconThemeLight } from '../../shared/icons';
 
 // Topbar solid (tanpa blur), sticky di atas. Kiri: hamburger (mobile) + brand.
 // Kanan: status sinkron, tombol tema, avatar menuju Settings.
@@ -16,7 +16,7 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
   const loc = useLocation();
   const meta = navByPath(loc.pathname);
   const online = useOnlineStatus();
-  const { theme, toggle } = useTheme();
+  const { mode, toggleMode } = useTheme();
   const { user } = useAuthState();
   const me = useProfile(user?.uid);
   const space = useSpace(spaceId);
@@ -82,12 +82,12 @@ export default function Topbar({ spaceId, onOpenDrawer, drawerOpen = false }) {
           </span>
           <button
             type="button"
-            onClick={toggle}
-            aria-label="Ubah tema"
+            onClick={toggleMode}
+            aria-label="Ubah mode terang/gelap"
             className="icon-btn"
-            title={theme === 'dark' ? 'Mode terang' : 'Mode gelap'}
+            title={mode === 'dark' ? 'Mode terang' : 'Mode gelap'}
           >
-            {theme === 'dark' ? <IconThemeLight size={20} /> : <IconThemeDark size={20} />}
+            {mode === 'dark' ? <IconThemeLight size={20} /> : <IconThemeDark size={20} />}
           </button>
           <Link
             to="/settings"

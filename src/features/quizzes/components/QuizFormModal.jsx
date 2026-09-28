@@ -5,18 +5,16 @@ import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import { createQuiz } from '../services/quizService';
-import { appendQuestionIds } from '../utils/quizQuestions';
-import QuestionPicker from './QuestionPicker';
 
-// Form buat kuis: judul + deskripsi + topik, lalu pilih minimal satu soal.
+// Form buat kuis: HANYA judul + deskripsi + topik.
 //
-// CATATAN SCHEMA: `quiz.questionIds` wajib berisi 1..50 id (Firestore Rules
-// `validQuiz`), jadi kuis TIDAK bisa dibuat tanpa soal. Karena itu panel
-// QuestionPicker (yang sama dipakai di QuestionPickerModal) ditampilkan
-// inline di step kedua form, bukan dibuatkan dokumen soal placeholder.
-export default function QuizFormModal({ open, onClose, onCreated, spaceId, topics = [], questions, questionsLoading, questionsError }) {
+// Kuis sengaja boleh dibuat dengan `questionIds: []` (draft): setelah create
+// berhasil, user langsung masuk ke `/quiz/:quizId` (QuizEditorPage) untuk
+// menambah soal dari editor. Ini selaras dengan `validQuiz` di firestore.rules
+// yang kini menerima list kosong. Soal yang sudah tersimpan tetap bisa
+// ditambahkan nanti lewat tombol "Tambah Soal" → "Pilih Soal Tersimpan".
+export default function QuizFormModal({ open, onClose, onCreated, spaceId, topics = [] }) {
   const [form, setForm] = useState({ title: '', description: '', topicId: '' });
-  const [picked, setPicked] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   // Reset hanya saat modal dibuka (pola sama seperti TopicFormModal).
@@ -26,7 +24,6 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
     if (open && !wasOpen.current) {
       wasOpen.current = true;
       setForm({ title: '', description: '', topicId: topics[0]?.id || '' });
-      setPicked([]);
       setError(null);
       setBusy(false);
     } else if (!open) {
@@ -45,20 +42,16 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
       setError('Topik kuis wajib dipilih.');
       return;
     }
-    if (picked.length === 0) {
-      setError('Pilih minimal satu soal tersimpan.');
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
-      // Validasi penuh (title, topicId, questionIds, settings) dijalankan di
-      // service/quizSettings — form hanya memberi pesan yang lebih ramah.
+      // `questionIds: []` — draft. Validasi penuh (title, topicId, settings)
+      // dijalankan di service/quizSettings; form hanya pesan lebih ramah.
       const id = await createQuiz(spaceId, {
         title: form.title,
         description: form.description,
         topicId: form.topicId,
-        questionIds: appendQuestionIds([], picked)
+        questionIds: []
       });
       onClose();
       onCreated?.(id);
@@ -75,16 +68,15 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
     <Modal
       open={open}
       onClose={onClose}
-      wide
       title="Buat Quiz"
-      subtitle="Kuis menyimpan daftar soal sebagai snapshot; soal tetap tersimpan dan bisa dipakai lagi."
+      subtitle="Setelah dibuat, kamu langsung masuk ke editor untuk menambah soal."
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Batal
           </Button>
           <Button onClick={save} loading={busy}>
-            Buat &amp; buka editor
+            Buat Quiz
           </Button>
         </>
       }
@@ -122,18 +114,6 @@ export default function QuizFormModal({ open, onClose, onCreated, spaceId, topic
             </option>
           ))}
         </Select>
-
-        <div className="border-t border-line pt-4">
-          <p className="section-title mb-2">Pilih soal tersimpan (minimal 1)</p>
-          <QuestionPicker
-            questions={questions}
-            topics={topics}
-            loading={questionsLoading}
-            error={questionsError}
-            selected={picked}
-            onToggle={(id) => setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))}
-          />
-        </div>
 
         {error && <p className="text-[12.5px] text-accent">{error}</p>}
       </div>

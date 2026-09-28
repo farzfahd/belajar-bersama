@@ -1,3 +1,4 @@
+import { IconBookmark, IconCheck, IconEdit, IconFlag, IconRestore, IconTrash } from '../../../shared/icons';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -13,7 +14,7 @@ import { setNoteState } from '../services/noteService';
 function OwnerChip({ name, color, title }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 py-0.5 pl-1 pr-2"
+      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-elevated py-0.5 pl-1 pr-2"
       title={title}
     >
       <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
@@ -70,7 +71,7 @@ export default function NoteCard({
   };
 
   return (
-    <article className="card space-y-2.5 !py-4">
+    <article className="card space-y-2.5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="min-w-0 text-[14.5px] font-medium text-ink">
           {trashed ? (
@@ -141,7 +142,7 @@ export default function NoteCard({
                     disabled={busy}
                   >
                     {busy ? <Spinner size={12} /> : null}
-                    <span className={bookmarked ? 'text-accent' : ''}>🔖</span>
+                    <span className={bookmarked ? 'text-accent' : ''}><IconBookmark size={15} /></span>
                     {bookmarked ? 'Dibukukan' : 'Buku'}
                   </Button>
                   <Button
@@ -151,22 +152,22 @@ export default function NoteCard({
                     disabled={busy}
                   >
                     {busy ? <Spinner size={12} /> : null}
-                    <span className={understood ? 'text-ok' : ''}>✓</span>
+                    <span className={understood ? 'text-ok' : ''}><IconCheck size={15} /></span>
                     {understood ? 'Dipahami' : 'Pahami'}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => onEdit?.(note)}>
-                    ✎ Edit
+                    <IconEdit size={15} /> Edit
                   </Button>
                 </>
               )}
               {note.ownerId === me && (
                 <Button variant="danger" size="sm" onClick={() => onDelete?.(note)}>
-                  🗑
+                  <IconTrash size={15} />
                 </Button>
               )}
               {note.ownerId !== me && (
                 <Button variant="ghost" size="sm" onClick={() => onReport?.(note)}>
-                  ⚑ Report
+                  <IconFlag size={15} /> Report
                 </Button>
               )}
             </>
@@ -174,10 +175,10 @@ export default function NoteCard({
           {trashed && (
             <>
               <Button variant="ghost" size="sm" onClick={() => onRestore?.(note)}>
-                ↺ Pulihkan
+                <IconRestore size={15} /> Pulihkan
               </Button>
               <Button variant="danger" size="sm" onClick={() => onPurge?.(note)}>
-                🗑 Hapus permanen
+                <IconTrash size={15} /> Hapus permanen
               </Button>
             </>
           )}

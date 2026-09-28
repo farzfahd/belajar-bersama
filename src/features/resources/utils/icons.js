@@ -1,20 +1,22 @@
-// Ikon jenis resource (font emoji, tanpa aset eksternal).
-export function resourceTypeIcon(type) {
+// Kunci ikon jenis resource. File ini JS murni (tanpa JSX) supaya tetap
+// bisa diimpor unit test `node --test`; komponen React-nya ada di
+// components/ResourceTypeIcon.jsx.
+export function resourceTypeIconKey(type) {
   return (
     {
-      website: '🌐',
-      youtube: '▶️',
-      book: '📖',
-      pdf: '📄',
-      paper: '📑',
-      course: '🎓',
-      documentation: '📚',
-      dataset: '📊',
-      repository: '🧱',
-      video: '🎬',
-      image: '🖼️',
-      file: '📎'
-    }[type] || '🔗'
+      website: 'globe',
+      youtube: 'film',
+      book: 'book',
+      pdf: 'doc',
+      paper: 'doc',
+      course: 'cap',
+      documentation: 'books',
+      dataset: 'chart',
+      repository: 'blocks',
+      video: 'film',
+      image: 'image',
+      file: 'paperclip',
+    }[type] || 'link'
   );
 }
 

@@ -1,4 +1,16 @@
-import { IconEmptyNote } from '../../../shared/icons';
+import {
+  IconBold,
+  IconChecklist,
+  IconEdit,
+  IconEmptyNote,
+  IconFlag,
+  IconImage,
+  IconItalic,
+  IconLink,
+  IconList,
+  IconQuote,
+  IconTable
+} from '../../../shared/icons';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -7,7 +19,7 @@ import EmptyState from '../../../shared/ui/EmptyState';
 import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
 import TagInput from '../../../shared/ui/TagInput';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
@@ -412,18 +424,20 @@ export default function NoteEditorPage() {
     }
   };
 
+  // Ikon toolbar memakai SVG agar konsisten dengan sistem ikon; label teks
+  // (B, I, H, `, ```) sengaja dibiarkan monospace seperti sebelumnya.
   const TOOL_BUTTONS = [
-    { key: 'bold', label: 'B', title: 'Tebal (Ctrl+B)', onClick: () => wrapSelection('**', '**', 'tebal') },
-    { key: 'italic', label: 'I', title: 'Miring (Ctrl+I)', onClick: () => wrapSelection('*', '*', 'miring') },
+    { key: 'bold', icon: IconBold, title: 'Tebal (Ctrl+B)', onClick: () => wrapSelection('**', '**', 'tebal') },
+    { key: 'italic', icon: IconItalic, title: 'Miring (Ctrl+I)', onClick: () => wrapSelection('*', '*', 'miring') },
     { key: 'heading', label: 'H', title: 'Sub judul — mulai baris dengan ##', onClick: () => linePrefix('## ') },
-    { key: 'link', label: '🔗', title: 'Sisipkan link (Ctrl+K)', onClick: openLink },
-    { key: 'list', label: '•', title: 'Daftar', onClick: () => linePrefix('- ') },
-    { key: 'check', label: '☑', title: 'Checklist', onClick: () => linePrefix('- [ ] ') },
+    { key: 'link', icon: IconLink, title: 'Sisipkan link (Ctrl+K)', onClick: openLink },
+    { key: 'list', icon: IconList, title: 'Daftar', onClick: () => linePrefix('- ') },
+    { key: 'check', icon: IconChecklist, title: 'Checklist', onClick: () => linePrefix('- [ ] ') },
     { key: 'code', label: '`', title: 'Kode inline', onClick: () => wrapSelection('`', '`', 'kode') },
     { key: 'codeblock', label: '```', title: 'Blok kode', onClick: () => insertBlock(CODE_BLOCK.text, CODE_BLOCK.cursorOffset) },
-    { key: 'table', label: '▦', title: 'Sisipkan tabel', onClick: () => insertBlock(TABLE_BLOCK.text, TABLE_BLOCK.cursorOffset) },
-    { key: 'image', label: '▣', title: 'Sisipkan gambar via URL', onClick: openImage },
-    { key: 'quote', label: '❞', title: 'Kutipan', onClick: () => linePrefix('> ') }
+    { key: 'table', icon: IconTable, title: 'Sisipkan tabel', onClick: () => insertBlock(TABLE_BLOCK.text, TABLE_BLOCK.cursorOffset) },
+    { key: 'image', icon: IconImage, title: 'Sisipkan gambar via URL', onClick: openImage },
+    { key: 'quote', icon: IconQuote, title: 'Kutipan', onClick: () => linePrefix('> ') },
   ];
 
   const buildPayload = (f) => ({
@@ -529,9 +543,7 @@ export default function NoteEditorPage() {
 
   if (loading && !notes.length) {
     return (
-      <div className="flex justify-center py-16">
-        <Spinner size={28} />
-      </div>
+      <PageLoading label="Memuat catatan…" />
     );
   }
 
@@ -582,10 +594,10 @@ export default function NoteEditorPage() {
         <div className="flex flex-wrap justify-end gap-2 border-t border-line pt-4">
           {note.ownerId === user?.uid ? (
             <Link to={`/notes/${note.id}?edit=1&from=${encodeURIComponent(backTo)}`}>
-              <Button>✎ Edit catatan</Button>
+              <Button><IconEdit size={15} /> Edit catatan</Button>
             </Link>
           ) : (
-            <Button variant="ghost" onClick={() => setReportOpen(true)}>⚑ Report</Button>
+            <Button variant="ghost" onClick={() => setReportOpen(true)}><IconFlag size={15} /> Report</Button>
           )}
         </div>
         <Modal
@@ -645,7 +657,7 @@ export default function NoteEditorPage() {
                 mode === m ? 'border-b-accent font-semibold text-ink' : 'border-b-transparent text-dim hover:text-ink'
               }`}
             >
-              {m === 'edit' ? '✎ Editor' : '👁 Pratinjau'}
+              {m === 'edit' ? 'Editor' : 'Pratinjau'}
             </button>
           ))}
         </div>
@@ -758,7 +770,7 @@ export default function NoteEditorPage() {
                   onClick={b.onClick}
                    className="flex h-11 min-w-11 items-center justify-center rounded-smc border border-line bg-bg2 px-1.5 font-mono text-[11.5px] text-dim transition hover:border-ink hover:text-ink"
                 >
-                  {b.label}
+                  {b.icon ? <b.icon size={15} /> : b.label}
                 </button>
               ))}
             </div>

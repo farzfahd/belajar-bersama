@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { IconLink, IconPlus } from '../../../shared/icons';
 import Button from '../../../shared/ui/Button';
 import Input from '../../../shared/ui/Input';
 import { useToast } from '../../../shared/components/ToastProvider';
@@ -68,8 +69,8 @@ export default function OnboardingScreen() {
 
         <div className="mb-1 flex gap-6">
           {[
-            { key: 'create', label: '🆕 Buat ruang' },
-            { key: 'join', label: '🔗 Gabung kode' }
+            { key: 'create', icon: IconPlus, label: 'Buat ruang' },
+            { key: 'join', icon: IconLink, label: 'Gabung kode' }
           ].map((tab) => (
             <button
               key={tab.key}
@@ -81,7 +82,7 @@ export default function OnboardingScreen() {
                   : 'border-transparent text-dim hover:text-ink'
               }`}
             >
-              {tab.label}
+              <span className="inline-flex items-center gap-1.5"><tab.icon size={15} /> {tab.label}</span>
             </button>
           ))}
         </div>

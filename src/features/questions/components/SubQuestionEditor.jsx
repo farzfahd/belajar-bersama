@@ -1,3 +1,4 @@
+import { IconArrowDown, IconArrowRight, IconArrowUp, IconMinus } from '../../../shared/icons';
 import { SUB_QUESTION_TYPES, MAX_SUB_QUESTIONS } from '../utils/questionTypeFields';
 import { QUESTION_TYPE_LABELS } from '../../../lib/constants';
 import Button from '../../../shared/ui/Button';
@@ -101,11 +102,11 @@ function SubQuestionRow({ sub, index, total, field, disabled, onPatch, onRemove,
           ))}
         </select>
         <div className="ml-auto flex items-center gap-1">
-          <Button size="sm" variant="subtle" onClick={() => onMove(-1)} disabled={disabled || index === 0}>
-            ↑
+          <Button size="sm" variant="subtle" onClick={() => onMove(-1)} disabled={disabled || index === 0} aria-label="Naik">
+            <IconArrowUp size={15} />
           </Button>
-          <Button size="sm" variant="subtle" onClick={() => onMove(1)} disabled={disabled || index === total - 1}>
-            ↓
+          <Button size="sm" variant="subtle" onClick={() => onMove(1)} disabled={disabled || index === total - 1} aria-label="Turun">
+            <IconArrowDown size={15} />
           </Button>
           <Button size="sm" variant="danger" onClick={onRemove} disabled={disabled}>
             Hapus
@@ -141,7 +142,7 @@ function SubQuestionRow({ sub, index, total, field, disabled, onPatch, onRemove,
                   onClick={() => onPatch({ options: options.filter((_, i) => i !== oi) })}
                   disabled={disabled}
                 >
-                  −
+                  <IconMinus size={15} />
                 </Button>
               )}
             </div>
@@ -205,7 +206,7 @@ function SubQuestionRow({ sub, index, total, field, disabled, onPatch, onRemove,
                 placeholder="Kiri"
                 className={field}
               />
-              <span className="text-dimmer">→</span>
+              <IconArrowRight size={14} className="shrink-0 text-dimmer" />
               <input
                 value={pair.right}
                 onChange={(e) => onPatch({ pairs: pairs.map((p, i) => (i === pi ? { ...p, right: e.target.value } : p)) })}

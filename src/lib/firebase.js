@@ -1,12 +1,13 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import {
+  connectFirestoreEmulator,
   initializeFirestore,
   memoryLocalCache,
   persistentLocalCache,
-  persistentMultipleTabManager,
-  connectFirestoreEmulator
+  persistentMultipleTabManager
 } from 'firebase/firestore';
+import { RECAPTCHA_V3, resolveRecaptchaProvider } from './appCheckProvider';
 
 const env = import.meta.env;
 const hasRealConfig = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID']
@@ -59,17 +60,41 @@ if (USE_EMULATORS) {
 }
 
 // App Check: hanya di lingkungan asli, bukan emulator, dan saat site key ada.
-// Menggunakan provider reCAPTCHA Enterprise terbaru. Dipanggil dari main.jsx.
+//
+// Provider diambil lewat resolveRecaptchaProvider() di atas, yang jatuh ke
+// 'enterprise' bila env kosong/tidak dikenal — bukan ke 'v3'. Jadi repository
+// variable GitHub yang belum diisi tidak boleh membuat produksi diam-diam
+// memakai provider yang salah.
+//
+// Perbedaan provider hanya cara memperoleh token; setelah itu token dikirim
+// otomatis oleh SDK untuk Auth + Firestore, jadi Rules tidak perlu diubah.
 export async function initAppCheck() {
   if (USE_EMULATORS || !hasRealConfig || !env.VITE_RECAPTCHA_SITE_KEY) return null;
+  // Debug token hanya untuk development lokal; nilainya TIDAK boleh ikut
+  // commit (isi lewat .env.development.local yang sudah di .gitignore).
   if (env.VITE_APPCHECK_DEBUG_TOKEN === 'true') {
     globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
   } else if (env.VITE_APPCHECK_DEBUG_TOKEN) {
     globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN = env.VITE_APPCHECK_DEBUG_TOKEN;
   }
-  const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
-  return initializeAppCheck(app, {
-    provider: new ReCaptchaEnterpriseProvider(env.VITE_RECAPTCHA_SITE_KEY),
+  const mod = await import('firebase/app-check');
+  const providerName = resolveRecaptchaProvider(env.VITE_RECAPTCHA_PROVIDER);
+
+  if (providerName === RECAPTCHA_V3) {
+    console.warn(
+      '[App Check] VITE_RECAPTCHA_PROVIDER="v3" — reCAPTCHA v3 TIDAK dipakai ' +
+        'project ini. Produksi harus "enterprise". Melanjutkan agar app tidak mati, ' +
+        'tapi token kemungkinan tidak valid.'
+    );
+  }
+
+  const provider =
+    providerName === RECAPTCHA_V3
+      ? new mod.ReCaptchaV3Provider(env.VITE_RECAPTCHA_SITE_KEY)
+      : new mod.ReCaptchaEnterpriseProvider(env.VITE_RECAPTCHA_SITE_KEY);
+
+  return mod.initializeAppCheck(app, {
+    provider,
     isTokenAutoRefreshEnabled: true
   });
 }

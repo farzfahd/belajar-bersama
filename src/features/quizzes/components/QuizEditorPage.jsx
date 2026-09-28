@@ -1,35 +1,48 @@
-import { IconSearch, IconEmptyNote } from '../../../shared/icons';
+import { IconBooks, IconEmptyNote, IconPlus, IconSearch, IconWarn } from '../../../shared/icons';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
 import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
-import Spinner from '../../../shared/components/Spinner';
+import StatusNote from '../../../shared/ui/StatusNote';
+import ConfirmDialog from '../../../shared/ui/ConfirmDialog';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
 import { useTopics } from '../../topics/hooks/useTopics';
 import { useQuestions } from '../../questions/hooks/useQuestions';
-import QuestionFormModal from '../../questions/components/QuestionFormModal';
 import QuestionDetailModal from '../../questions/components/QuestionDetailModal';
-import { useQuiz } from '../hooks/useQuizzes';
+import QuestionReportModal from '../../questions/components/QuestionReportModal';
+import { useQuiz, useAttempts } from '../hooks/useQuizzes';
 import { deleteQuiz, updateQuiz, updateQuizQuestionIds } from '../services/quizService';
 import { normalizeQuizSettings } from '../utils/quizSettings';
+import { ATTEMPT_STATUS, canStartNewAttempt, findInProgress } from '../utils/attemptEngine';
 import {
   appendQuestionIds,
+  buildEditorCards,
   buildQuizQuestionRows,
+  cardKeyOf,
+  cardMoveBounds,
+  isDraftCardVisible,
+  moveDraftCard,
   moveQuestionIdAt,
+  moveQuestionIdTo,
   removeQuestionIdAt
 } from '../utils/quizQuestions';
-import QuestionPickerModal from './QuestionPickerModal';
-import AddQuestionModal from './AddQuestionModal';
 import {
-  QUIZ_LIMITS,
-  QUIZ_SETTINGS_DEFAULTS,
-  QUESTION_TYPE_LABELS
-} from '../../../lib/constants';
+  EDITOR_STATE,
+  canRetryEditor,
+  editorFailureMessage,
+  isValidQuizId,
+  resolveQuizEditorState
+} from '../utils/quizEditorState';
+import { emptyQuestionDraft } from '../utils/questionCard';
+import QuestionPickerModal from './QuestionPickerModal';
+import QuestionCard from './QuestionCard';
+import { QUIZ_LIMITS, QUIZ_SETTINGS_DEFAULTS } from '../../../lib/constants';
 import { timeAgo } from '../../../shared/utils/time';
 import { toErrorMessage } from '../../../shared/utils/errors';
 
@@ -58,28 +71,71 @@ function SwitchRow({ label, checked, onChange, disabled }) {
 // Workspace penyusun kuis: header + pengaturan + daftar soal.
 // Setiap aksi pada questionIds (tambah / hapus / ubah urutan) = SATU write,
 // tidak ada write per keystroke dan tidak ada listener per baris soal.
-export default function QuizEditorPage() {
+//
+// Alur "Buat Quiz → editor" adalah bagian wajib dari fitur: gagal membuka
+// editor ditampilkan sebagai error yang jelas (lihat `utils/quizEditorState`),
+// BUKAN sebagai editor kosong. Halaman ini tidak pernah membuat kuis — retry
+// hanya membaca ulang dokumen yang sama, jadi tidak mungkin ada kuis duplikat.
+export default function QuizEditorPage({ quiz: quizProp = null }) {
   const { quizId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
   const spaceId = useSpaceId();
   const { user } = useAuthState();
 
-  const { data: quiz, loading, error } = useQuiz(spaceId, quizId);
+  // `quizId` yang dipakai membaca dokumen kuis. Id dari route dicek dulu supaya
+  // path yang tidak valid tidak pernah sampai ke Firestore.
+  const routeIdValid = isValidQuizId(quizId);
+  const [reloadKey, setReloadKey] = useState(0);
+  const retry = () => setReloadKey((k) => k + 1);
+  // Datang langsung dari "Buat Quiz"? Pesan kegagalan jadi jujur: kuis mungkin
+  // sudah tercipta, jadi jangan pernah menyarankan membuat kuis kedua.
+  const justCreated = Boolean(location.state?.justCreated);
+
+  // Kalau route sudah memuat kuis (QuizRoutePage memilih tampilan berdasarkan
+  // kepemilikan), listener di sini dimatikan supaya tidak ada dua listener atas
+  // dokumen yang sama.
+  const {
+    data: fetchedQuiz,
+    loading: fetching,
+    error,
+    errorCode
+  } = useQuiz(spaceId, routeIdValid ? quizId : '', { reloadKey, enabled: !quizProp });
+  const quiz = quizProp || fetchedQuiz;
+  const loading = !quizProp && fetching;
   const { data: topics = [] } = useTopics(spaceId);
   // Satu listener bank soal dipakai bersama oleh baris soal DAN picker.
   const { data: questions = [], loading: bankLoading, error: bankError } = useQuestions(spaceId);
+  // Riwayat attempt milik pengguna ini (rules menjadikan attempts privat).
+  const { data: attempts = [] } = useAttempts(spaceId, routeIdValid ? quizId : '');
+  const inProgress = findInProgress(attempts, user?.uid);
 
   const [form, setForm] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [pending, setPending] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [questionFormOpen, setQuestionFormOpen] = useState(false);
-  const [editTarget, setEditTarget] = useState(null);
   const [previewTarget, setPreviewTarget] = useState(null);
+  // Konfirmasi berdesain (bukan window.confirm): satu tempat untuk soal yang
+  // dikeluarkan dan kuis yang dihapus.
+  const [confirmAction, setConfirmAction] = useState(null);
+const [reportTarget, setReportTarget] = useState(null);
+  // Kartu soal baru yang belum punya id (menunggu autosave pertama).
+  const [newCards, setNewCards] = useState([]);
+  // id_soal -> id draft sementara. Dipakai sebagai React key supaya kartu yang
+  // sama tidak remount setelah autosave pertama memberi id permanen: tanpa ini
+  // state `expanded` di dalam kartu ikut hilang, jadi kartu yang sedang diisi
+  // mendadak menutup tepat setelah "tersimpan".
+  const [draftKeyById, setDraftKeyById] = useState({});
+
+  // `quizId` dari route harus berupa id dokumen yang bisa dibaca. Id rusak
+  // (mis. berisi `/`) diperlakukan sebagai "tidak ditemukan" — bukan loading
+  // selamanya dan bukan editor kosong.
+  const editorState = routeIdValid
+    ? resolveQuizEditorState({ loading, error, errorCode, quiz })
+    : EDITOR_STATE.notFound;
 
   const isOwner = Boolean(quiz && quiz.createdBy === user?.uid);
   const locked = !isOwner;
@@ -106,6 +162,29 @@ export default function QuizEditorPage() {
   );
   const missingCount = rows.filter((r) => r.missing).length;
   const topicTitle = (id) => topics.find((t) => t.id === id)?.title || 'Topik dihapus';
+
+  // Kartu yang dirender = soal tersimpan di kuis + kartu baru yang belum punya
+  // id (belum masuk `questionIds` sampai autosave pertama berhasil). Kartu baru
+  // selalu di BELAKANG supaya posisinya sama sebelum dan sesudah create: kalau
+  // di depan, kartu melompat ke bawah tepat setelah save.
+  const cards = useMemo(() => buildEditorCards(rows, newCards), [rows, newCards]);
+  // Id soal yang sudah ada di snapshot — dipakai untuk menyembunyikan entry
+  // draft yang tautannya sudah selesai.
+  const presentIds = useMemo(() => new Set(rows.map((r) => r.questionId)), [rows]);
+  // Jumlah kartu baru yang benar-benar dirender (entry yang sudah tertaut tapi
+  // barisnya belum tiba tidak ikut dihitung, supaya batas tombol panah tepat).
+  const draftCount = cards.length - rows.length;
+
+  // Entry draft yang barisnya sudah ada di snapshot dibersihkan dari state.
+  // Rendernya sudah aman tanpa ini (`buildEditorCards` menyembunyikannya), jadi
+  // ini murni menjaga state tetap sama dengan yang terlihat: `draftCount` selalu
+  // jumlah kartu baru yang benar-benar dirender, tidak ada entry yang menumpuk.
+  useEffect(() => {
+    setNewCards((prev) => {
+      const next = prev.filter((c) => isDraftCardVisible(c, presentIds));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [presentIds]);
 
   const setField = (key) => (e) => {
     setDirty(true);
@@ -169,13 +248,127 @@ export default function QuizEditorPage() {
 
   const handleRemove = (row) => {
     const label = row.question ? row.question.prompt.slice(0, 40) : row.questionId;
-    if (!window.confirm(`Keluarkan soal "${label}…" dari kuis?\n\nSoal tetap tersimpan di bank soal.`)) return;
-    mutateIds(removeQuestionIdAt(quiz.questionIds, row.position), 'Soal dikeluarkan dari kuis.');
+    setConfirmAction({
+      title: 'Keluarkan soal dari kuis?',
+      body: `"${label}…" akan dikeluarkan dari kuis ini. Soalnya tetap tersimpan di bank soal dan bisa ditambahkan lagi kapan saja.`,
+      confirmLabel: 'Keluarkan soal',
+      onConfirm: () => mutateIds(removeQuestionIdAt(quiz.questionIds, row.position), 'Soal dikeluarkan dari kuis.')
+    });
   };
 
-  const handleMove = (row, delta) => {
+  // ---- Kartu inline (gaya Google Forms) ----------------------------------
+  // Kartu yang belum punya id soal (baru dibuat lewat "+ Soal Baru") disimpan
+  // di state lokal. Id aslinya baru ada setelah autosave pertama berhasil,
+  // lalu kartu itu masuk `questionIds` lewat `handleCardSaved`.
+
+  // Draft kartu yang sudah tersimpan di Firestore diambil dari dokumen soal.
+  const draftOf = (row) => {
+    const q = row.question;
+    if (q) return { ...q, questionId: q.id };
+    const local = newCards.find((c) => c.questionId === row.questionId);
+    if (local) return local.draft;
+    return { ...emptyQuestionDraft(quiz?.topicId || topics[0]?.id || ''), questionId: row.questionId };
+  };
+
+  const addInlineCard = () => {
+    if (!quiz) return;
+    const questionId = `new_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // Selalu append: kartu baru muncul di paling bawah, bukan di paling atas.
+    setNewCards((prev) => [
+      ...prev,
+      {
+        questionId,
+        // Berisi setelah autosave pertama berhasil; dipakai untuk menyembunyikan
+        // entry ini begitu barisnya muncul di snapshot.
+        realId: null,
+        // Default soal baru: Pilihan Ganda (tipe paling umum), langsung expanded
+        // dan fokus ke input pertanyaan.
+        draft: { ...emptyQuestionDraft(quiz.topicId || topics[0]?.id || ''), questionId },
+        focus: true
+      }
+    ]);
+  };
+
+  // Kartu baru selesai autosave pertama → tautkan ke kuis (questionIds) di
+  // UJUNG, supaya soal baru masuk paling bawah — sama seperti "Dari Bank Soal".
+  //
+  // Entry draft TIDAK dihapus di sini. `buildEditorCards` menyembunyikannya begitu
+  // baris dengan `realId`-nya muncul di snapshot, jadi satu soal tidak pernah
+  // tampil dua kali dan kartu tidak pernah hilang lalu muncul lagi. `draftKeyById`
+  // menahan id draft sebagai React key, jadi kartu yang sama hanya diperbarui
+  // (bukan remount) — inilah yang menjaga posisi, state expanded, dan fokus.
+  const handleCardSaved = async (cardKey, realId) => {
+    if (!realId) return;
+    setNewCards((prev) => prev.map((c) => (c.questionId === cardKey ? { ...c, realId, focus: false } : c)));
+    setDraftKeyById((prev) => ({ ...prev, [realId]: cardKey }));
+    if (!quiz) return;
+    setPending(true);
+    try {
+      await updateQuizQuestionIds(spaceId, quiz.id, appendQuestionIds(quiz.questionIds, [realId]));
+      toast.success('Soal ditambahkan ke kuis.');
+    } catch (e) {
+      // Kartu sengaja tetap terlihat: dokumen soal sudah aman di bank soal, dan
+      // user masih bisa mengeditnya atau menambahkannya lewat Bank Soal.
+      toast.error(toErrorMessage(e, 'Gagal menautkan soal ke kuis. Soal tetap tersimpan di bank soal.'));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  // Duplikat: menyalin isi soal ke kartu baru (dokumen baru dibuat sendiri
+  // saat autosave, jadi tidak berbagi id dengan aslinya).
+  const handleDuplicate = (row) => {
+    if (!quiz || !row.question) return;
+    const questionId = `new_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { id, createdBy, createdAt, updatedAt, commentCount, deletedAt, ...rest } = row.question;
+    setNewCards((prev) => [
+      ...prev,
+      {
+        questionId,
+        realId: null,
+        draft: { ...rest, questionId, prompt: `${rest.prompt} (salinan)` },
+        focus: true
+      }
+    ]);
+  };
+
+  // Reorder dari drag handle. Memakai util yang sudah ada (`moveQuestionIdTo`)
+  // supaya tidak ada logika urutan kedua.
+  //
+  // Indeks dari drag adalah indeks di `cards`, sedangkan yang ditulis adalah
+  // `quiz.questionIds`. Jadi indeks kartu WAJIB dipetakan ke `position` (indeks
+  // di questionIds) dulu — memakai indeks kartu langsung akan menimpa soal yang
+  // salah begitu ada satu kartu baru. Kartu yang belum punya id soal
+  // (`position == null`) tidak bisa dipetakan ke `questionIds`, jadi tidak
+  // dipindahkan lewat drag; posisinya digeser lewat tombol panah.
+  const handleReorder = (from, to) => {
+    if (!quiz || locked) return;
+    if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+    const fromCard = cards[from];
+    const toCard = cards[to];
+    if (!fromCard || !toCard) return;
+    if (fromCard.position == null || toCard.position == null) return;
+    mutateIds(moveQuestionIdTo(quiz.questionIds, fromCard.position, toCard.position));
+  };
+
+  // Tombol panah Naik/Turun: satu langkah, lewat util yang sama dengan drag
+  // (`moveQuestionIdAt`), jadi hasilnya tidak mungkin beda.
+  // Kartu baru (belum punya id soal) hanya boleh digeser di dalam blok kartu
+  // baru — ia belum ada di `questionIds` sampai autosave pertama berhasil.
+  const handleMoveStep = (row, delta) => {
+    if (!quiz || locked) return;
+    if (row.position == null) {
+      const next = moveDraftCard(newCards, row.questionId, delta, presentIds);
+      if (next === newCards) return;
+      setNewCards(next);
+      return;
+    }
     mutateIds(moveQuestionIdAt(quiz.questionIds, row.position, delta));
   };
+
+  // Batas tombol panah per kartu, supaya tidak ada tombol mati. Sumber
+  // perhitungannya satu util yang sama dengan logikanya di atas.
+  const moveBounds = (row) => cardMoveBounds(row, { questionIds: quiz?.questionIds, draftCount });
 
   const handleAddFromBank = async (selectedIds) => {
     if (!quiz || locked) return;
@@ -195,79 +388,72 @@ export default function QuizEditorPage() {
     }
   };
 
-  // Soal baru dibuat dari editor otomatis masuk kuis ini, dan tetap ada di bank soal.
-  const handleQuestionSaved = async (savedId) => {
-    if (!savedId || !quiz || locked) return;
-    const next = appendQuestionIds(quiz.questionIds, [savedId]);
-    if (next.length === quiz.questionIds.length) return;
-    setPending(true);
-    try {
-      await updateQuizQuestionIds(spaceId, quiz.id, next);
-      toast.success('Soal baru ditambahkan ke kuis.');
-    } catch (e) {
-      toast.error(toErrorMessage(e, 'Gagal menautkan soal baru ke kuis.'));
-    } finally {
-      setPending(false);
-    }
-  };
-
   const handleDelete = async () => {
     if (!quiz) return;
-    if (!window.confirm(`Hapus kuis "${quiz.title}"?\n\nSoal-soalnya tetap ada di bank soal.`)) return;
-    try {
-      await deleteQuiz(spaceId, quiz.id);
-      toast.success('Kuis dihapus.');
-      navigate('/quiz');
-    } catch (e) {
-      toast.error(toErrorMessage(e, 'Gagal menghapus kuis.'));
-    }
+    setConfirmAction({
+      title: 'Hapus kuis?',
+      body: `Kuis "${quiz.title}" akan dihapus. Soal-soalnya tetap ada di bank soal, begitu juga riwayat attempt milikmu.`,
+      confirmLabel: 'Hapus kuis',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await deleteQuiz(spaceId, quiz.id);
+          toast.success('Kuis dihapus.');
+          navigate('/quiz');
+        } catch (e) {
+          toast.error(toErrorMessage(e, 'Gagal menghapus kuis.'));
+        }
+      }
+    });
   };
 
+  // Mulai (atau lanjutkan) pengerjaan. Attempt dibuat oleh halaman attempt
+  // agar snapshot soal tercatat di server saat pengerjaan benar-benar dimulai.
+  const handleStartAttempt = () => {
+    navigate(`/quiz/${quizId}/attempt`);
+  };
 
   // ---------- states halaman ----------
-  if (loading) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spinner size={26} />
-      </div>
-    );
+  // Gagal membuka editor = ERROR KRITIS, bukan warning: tidak boleh pernah
+  // menampilkan editor kosong seolah-olah berhasil. Semua state memakai
+  // EmptyState yang sudah ada (pola yang sama dengan halaman lain).
+  if (editorState === EDITOR_STATE.loading) {
+    return <PageLoading label="Memuat editor…" />;
   }
 
-  if (error) {
-    return (
-      <div className="space-y-3">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/quiz')}>
-          ← Kembali ke daftar kuis
-        </Button>
-        <p className="rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] p-4 text-[13.5px] text-ink">
-          Gagal memuat kuis: {error.message || String(error)}
-        </p>
-      </div>
-    );
-  }
-
-  if (!quiz) {
+  if (editorState !== EDITOR_STATE.ready) {
+    const message = editorFailureMessage(editorState, { justCreated });
+    const detail = error ? String(error.message || error) : '';
     return (
       <div className="space-y-4">
         <Button variant="ghost" size="sm" onClick={() => navigate('/quiz')}>
           ← Kembali ke daftar kuis
         </Button>
         <EmptyState
-          icon={<IconSearch size={26} />}
-          title="Kuis Tidak Ditemukan"
-          description="Kuis ini tidak ada di ruang ini, atau sudah dihapus."
-          action={<Button onClick={() => navigate('/quiz')}>Lihat daftar kuis</Button>}
+          icon={
+            editorState === EDITOR_STATE.notFound ? <IconSearch size={26} /> : <IconWarn size={26} />
+          }
+          title={message.title}
+          description={detail ? `${message.description} (${detail})` : message.description}
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              {canRetryEditor(editorState) && (
+                <Button onClick={retry} title="Baca ulang dokumen kuis yang sama">
+                  Coba lagi
+                </Button>
+              )}
+              <Button variant="ghost" onClick={() => navigate('/quiz')}>
+                Buka daftar kuis
+              </Button>
+            </div>
+          }
         />
       </div>
     );
   }
 
   if (!form) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spinner size={26} />
-      </div>
-    );
+    return <PageLoading label="Menyiapkan form…" />;
   }
 
   return (
@@ -281,7 +467,7 @@ export default function QuizEditorPage() {
           <div className="flex items-center gap-2">
             <span
               className={`font-mono text-[10.5px] uppercase tracking-wider ${
-                saveError ? 'text-accent' : 'text-dimmer'
+                saveError ? 'text-danger' : dirty ? 'text-warn' : 'text-dimmer'
               }`}
             >
               {saving
@@ -307,6 +493,11 @@ export default function QuizEditorPage() {
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone="accent">{rows.length} soal</Badge>
             <Badge tone="dim">{topicTitle(quiz.topicId)}</Badge>
+            {missingCount > 0 && (
+              <Badge tone="warn">
+                {missingCount} soal tidak ditemukan
+              </Badge>
+            )}
             {!isOwner && <Badge tone="warn">Hanya pembuat yang bisa mengubah</Badge>}
           </div>
         </div>
@@ -320,6 +511,81 @@ export default function QuizEditorPage() {
         )}
       </header>
 
+      {/* ---------- MULAI / RIWAYAT ATTEMPT (CP2) ---------- */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title">Pengerjaan</h2>
+          <div className="flex items-center gap-2">
+            <Badge tone="dim">
+              {attempts.length} / {quiz.settings?.maxAttempts ?? 3} percobaan
+            </Badge>
+            <Button
+              size="sm"
+              disabled={rows.length === 0 || !canStartNewAttempt(attempts, quiz.settings?.maxAttempts, quiz.settings?.allowRetry)}
+              title={
+                rows.length === 0
+                  ? 'Tambahkan minimal satu soal sebelum mengerjakan kuis.'
+                  : attempts.length > 0
+                    ? 'Mulai percobaan baru. Percobaan yang sedang berjalan akan dilanjutkan.'
+                    : undefined
+              }
+              onClick={handleStartAttempt}
+            >
+              {inProgress ? 'Lanjutkan' : 'Mulai kuis'}
+            </Button>
+          </div>
+        </div>
+
+        {attempts.length === 0 ? (
+          <p className="text-[13px] text-dimmer">Belum ada percobaan.</p>
+        ) : (
+          <ul className="flex flex-col">
+            {attempts.map((a) => (
+              <li key={a.id} className="border-b border-line last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      a.status === ATTEMPT_STATUS.inProgress
+                        ? `/quiz/${quizId}/attempt`
+                        : `/quiz/${quizId}/attempt/${a.id}/result`
+                    )
+                  }
+                  className="flex w-full items-center justify-between gap-3 py-2.5 text-left"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[14px] text-ink">
+                      {a.status === ATTEMPT_STATUS.inProgress ? 'Sedang berjalan' : `${a.scorePercent}%`}
+                    </span>
+                    <span className="block text-[12px] text-dimmer">{timeAgo(a.startedAt)}</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    {a.passed && <Badge tone="ok">Lulus</Badge>}
+                    <Badge
+                      tone={
+                        a.status === ATTEMPT_STATUS.inProgress
+                          ? 'accent'
+                          : a.status === ATTEMPT_STATUS.pendingManualGrade
+                            ? 'warn'
+                            : 'dim'
+                      }
+                    >
+                      {a.status === ATTEMPT_STATUS.inProgress
+                        ? 'Berjalan'
+                        : a.status === ATTEMPT_STATUS.pendingManualGrade
+                          ? 'Menunggu nilai'
+                          : a.status === ATTEMPT_STATUS.graded
+                            ? 'Dinilai'
+                            : 'Selesai'}
+                    </Badge>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {locked && (
         <p className="rounded-smc border border-line bg-bg2 px-3 py-2 text-[13px] text-dim">
           Kamu adalah partner pembuat kuis ini, jadi isinya hanya bisa dibaca. Minta pembuat kuis untuk
@@ -328,9 +594,9 @@ export default function QuizEditorPage() {
       )}
 
       {saveError && !locked && (
-        <p className="rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
+        <StatusNote tone="danger">
           {saveError} Perubahanmu belum tersimpan — perbaiki lalu tekan Simpan lagi.
-        </p>
+        </StatusNote>
       )}
 
 
@@ -368,20 +634,6 @@ export default function QuizEditorPage() {
         </Select>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Input
-            label="Jumlah soal"
-            type="number"
-            min={QUIZ_LIMITS.minQuestions}
-            max={QUIZ_LIMITS.maxQuestions}
-            value={form.settings.questionCount}
-            onChange={setSettingNumber('questionCount')}
-            disabled={locked}
-            // `questionCount` TIDAK dipaksa sama dengan jumlah soal: kuis boleh
-            // punya lebih banyak soal daripada yang dipakai bila pengacakan
-            // aktif. Yang dijamin hanya rentangnya (1–50, divalidasi rules +
-            // normalizeQuizSettings), jadi tidak pernah error saat dipakai.
-            hint={`Soal tersedia di kuis: ${rows.length}. Nilai dipakai saat pengerjaan (acak/ sampling).`}
-          />
           <Input
             label="Batas waktu (menit)"
             type="number"
@@ -455,29 +707,93 @@ export default function QuizEditorPage() {
       </section>
 
 
-      {/* ---------- DAFTAR SOAL ---------- */}
+      {/* ---------- DAFTAR SOAL (kartu inline, gaya Google Forms) ---------- */}
+      {/* Tanpa modal wizard: tiap soal = satu kartu yang bisa diedit di tempat
+          dan autosave sendiri. "Dari Bank Soal" tetap memakai QuestionPicker
+          yang sudah ada (alurnya tidak berubah). */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="section-title">Soal dalam kuis ({rows.length})</h2>
+          <h2 className="section-title">Daftar soal ({cards.length})</h2>
           {isOwner && (
-            <Button
-              size="sm"
-              onClick={() => setAddOpen(true)}
-              disabled={rows.length >= QUIZ_LIMITS.maxQuestions}
-              title={
-                rows.length >= QUIZ_LIMITS.maxQuestions
-                  ? `Kuis sudah mencapai batas ${QUIZ_LIMITS.maxQuestions} soal.`
-                  : undefined
-              }
-            >
-              ＋ Tambah Soal
-            </Button>
+            <span className="font-mono text-[11px] uppercase tracking-wider text-dimmer">
+              {cards.length}/{QUIZ_LIMITS.maxQuestions}
+            </span>
           )}
         </div>
 
+        {cards.length === 0 ? (
+          <EmptyState
+            icon={<IconEmptyNote size={26} />}
+            title="Belum ada soal. Buat soal pertama untuk quiz ini."
+            description="Klik + Soal Baru di bawah — soal langsung tersimpan otomatis dan masuk di bagian paling bawah daftar ini."
+          />
+        ) : (
+          <ul className="space-y-3">
+            {cards.map((row, i) => {
+              const bounds = moveBounds(row);
+              return (
+                <QuestionCard
+                  key={cardKeyOf(row, draftKeyById)}
+                  draft={draftOf(row)}
+                  questionId={row.position == null ? null : row.questionId}
+                  index={i}
+                  total={cards.length}
+                  topics={topics}
+                  spaceId={spaceId}
+                  locked={locked}
+                  draggable={isOwner}
+                  canMoveUp={bounds.up}
+                  canMoveDown={bounds.down}
+                  autoFocus={Boolean(row.focus)}
+                  onSaved={(newId) => handleCardSaved(row.questionId, newId)}
+                  onRemove={() => handleRemove(row)}
+                  onDuplicate={() => handleDuplicate(row)}
+                  onReport={
+                    // Hanya soal milik partner yang sudah tersimpan (draft punya
+                    // `question: null`) - rules menolak report atas soal sendiri.
+                    row.question && row.question.createdBy !== user?.uid
+                      ? () => setReportTarget(row.question)
+                      : undefined
+                  }
+                  onMove={isOwner ? handleReorder : undefined}
+                  onMoveStep={isOwner ? (delta) => handleMoveStep(row, delta) : undefined}
+                />
+              );
+            })}
+          </ul>
+        )}
+
+        {/* Footer: dua cara menambah soal. */}
+        {isOwner && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={addInlineCard}
+              disabled={cards.length >= QUIZ_LIMITS.maxQuestions}
+              title={
+                cards.length >= QUIZ_LIMITS.maxQuestions
+                  ? `Kuis sudah mencapai batas ${QUIZ_LIMITS.maxQuestions} soal.`
+                  : 'Soal baru muncul di bagian paling bawah daftar.'
+              }
+            >
+              <IconPlus size={15} /> Soal Baru
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setPickerOpen(true)}
+              disabled={cards.length >= QUIZ_LIMITS.maxQuestions}
+            >
+              <IconBooks size={15} /> Dari Bank Soal
+            </Button>
+          </div>
+        )}
+
         {isOwner && (
           <p className="text-[12px] text-dimmer">
-            Soal dibuat dari sini langsung masuk kuis ini dan tetap bisa dipakai di kuis lain.{' '}
+            Perubahan tiap soal tersimpan otomatis. Soal baru dan soal dari Bank Soal selalu masuk di
+            bagian paling bawah daftar. Soal tetap bisa dipakai lagi di kuis lain.{' '}
             <button
               type="button"
               onClick={() => navigate('/questions')}
@@ -488,131 +804,12 @@ export default function QuizEditorPage() {
           </p>
         )}
 
-        {bankError && (
-          <p className="rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
-            Gagal memuat isi soal: {bankError.message || String(bankError)}
-          </p>
-        )}
-
-        {rows.length === 0 ? (
-          <EmptyState
-            icon={<IconEmptyNote size={26} />}
-            title="Quiz ini belum memiliki soal."
-            description="Buat soal baru, atau pilih soal yang sudah tersimpan untuk langsung dipakai di kuis ini."
-            action={
-              isOwner ? (
-                <Button onClick={() => setAddOpen(true)}>＋ Tambah Soal</Button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((row) => {
-              const q = row.question;
-              // Rules: hanya pembuat soal yang boleh mengubah dokumen soal.
-              const canEditQuestion = Boolean(q) && q.createdBy === user?.uid;
-              return (
-                <li key={`${row.questionId}-${row.position}`} className="card space-y-2 p-3">
-                  <div className="flex items-start gap-3">
-                    <span className="mt-0.5 w-6 shrink-0 text-right font-mono text-[12px] text-dimmer">
-                      {row.position + 1}
-                    </span>
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      {row.missing ? (
-                        <>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Badge tone="warn">Soal tidak ditemukan</Badge>
-                            <span className="font-mono text-[10.5px] uppercase tracking-wider text-dimmer">
-                              id {row.questionId}
-                            </span>
-                          </div>
-                          <p className="text-[13px] leading-relaxed text-dim">
-                            Soal ini tidak dapat dimuat (sudah dihapus, ada di Sampah, atau private milik
-                            partner). Id-nya tetap disimpan di kuis sampai kamu mengeluarkannya sendiri.
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Badge tone="accent">{QUESTION_TYPE_LABELS[q.type] || 'Pilihan Ganda'}</Badge>
-                            <span className="font-mono text-[10.5px] uppercase tracking-wider text-dimmer">
-                              {topicTitle(q.topicId)} · {q.points ?? 10} poin
-                            </span>
-                          </div>
-                          <p className="line-clamp-2 text-[13.5px] leading-relaxed text-ink">{q.prompt}</p>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5 border-t border-line pt-2">
-                    <Button variant="subtle" size="sm" onClick={() => setPreviewTarget(q)} disabled={row.missing}>
-                      Lihat
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => {
-                        setEditTarget(q);
-                        setQuestionFormOpen(true);
-                      }}
-                      disabled={!canEditQuestion}
-                      title={canEditQuestion ? undefined : 'Hanya pembuat soal yang bisa mengubah.'}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => handleMove(row, -1)}
-                      disabled={locked || pending || row.position === 0}
-                    >
-                      ↑ Naik
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => handleMove(row, 1)}
-                      disabled={locked || pending || row.position === rows.length - 1}
-                    >
-                      ↓ Turun
-                    </Button>
-                    <Button variant="danger" size="sm" onClick={() => handleRemove(row)} disabled={locked || pending}>
-                      Remove
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        {missingCount > 0 && (
-          <p className="text-[12px] text-warn">
-            {missingCount} soal tidak dapat dimuat. Id-nya sengaja tidak dihapus otomatis agar tidak hilang
-            tanpa jejak.
-          </p>
-        )}
       </section>
 
 
       {/* ---------- MODAL ---------- */}
-      {/* Satu pintu masuk "Tambah Soal" → dua jalur: form soal yang sudah ada
-          atau pemilih soal tersimpan. Keduanya tetap di dalam Quiz Editor. */}
-      <AddQuestionModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        onCreateNew={() => {
-          setAddOpen(false);
-          setEditTarget(null);
-          setQuestionFormOpen(true);
-        }}
-        onPickSaved={() => {
-          setAddOpen(false);
-          setPickerOpen(true);
-        }}
-      />
-
+      {/* "Dari Bank Soal" memakai QuestionPickerModal yang sudah ada — alurnya
+          tidak berubah. Kartu soal inline menggantikan modal wizard. */}
       <QuestionPickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -624,21 +821,27 @@ export default function QuizEditorPage() {
         usedIds={quiz.questionIds}
       />
 
-      <QuestionFormModal
-        open={questionFormOpen}
-        onClose={() => setQuestionFormOpen(false)}
-        spaceId={spaceId}
-        topics={topics}
-        initialData={editTarget}
-        onSaved={handleQuestionSaved}
-      />
-
       <QuestionDetailModal
         open={Boolean(previewTarget)}
         onClose={() => setPreviewTarget(null)}
+        spaceId={spaceId}
         question={previewTarget}
         isOwner={previewTarget?.createdBy === user?.uid}
+        onReport={(q) => {
+          setPreviewTarget(null);
+          setReportTarget(q);
+        }}
       />
+
+      <QuestionReportModal
+        open={Boolean(reportTarget)}
+        spaceId={spaceId}
+        question={reportTarget}
+        onClose={() => setReportTarget(null)}
+      />
+
+      {/* Konfirmasi untuk aksi merusak (keluarkan soal / hapus kuis). */}
+      <ConfirmDialog action={confirmAction} onClose={() => setConfirmAction(null)} />
     </div>
   );
 }

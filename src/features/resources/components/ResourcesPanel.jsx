@@ -2,8 +2,9 @@ import { IconExternalLink } from '../../../shared/icons';
 import { useMemo, useState } from 'react';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
+import FilterPanel from '../../../shared/ui/FilterPanel';
 import Select from '../../../shared/ui/Select';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useProfile } from '../../auth/hooks/useProfile';
@@ -17,7 +18,6 @@ import { useResourceStates } from '../hooks/useResourceStates';
 import { visibleActiveResources } from '../utils/visibility';
 import { deleteResource } from '../services/resourceService';
 import { STATUS, STATUS_LABEL } from '../../../lib/constants';
-import { resourceTypeIcon } from '../utils/icons';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import ResourceCard from './ResourceCard';
 import ResourceFormModal from './ResourceFormModal';
@@ -96,6 +96,17 @@ export default function ResourcesPanel({ scopeIds = null, presetTopicId = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scoped, states, filterTopic, filterType, filterTag, filterStatus, user?.uid]);
 
+  // Jumlah filter aktif untuk badge di tombol filter.
+  const activeFilterCount = [filterTopic, filterType, filterTag, filterStatus].filter(
+    (v) => v !== 'all'
+  ).length;
+  const resetFilters = () => {
+    setFilterTopic('all');
+    setFilterType('all');
+    setFilterTag('all');
+    setFilterStatus('all');
+  };
+
   const openDelete = (resource) =>
     setConfirm({
       title: `Hapus "${resource.title || resource.url}"?`,
@@ -118,59 +129,83 @@ export default function ResourcesPanel({ scopeIds = null, presetTopicId = null }
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         {!scopeIds ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={filterTopic}
-              onChange={(e) => setFilterTopic(e.target.value)}
-              aria-label="Filter topik"
-              className="w-[9.5rem]"
-            >
-              <option value="all">Semua topik</option>
-              {orderedTopics.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {'·  '.repeat(t.level)}
-                  {t.title}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              aria-label="Filter jenis"
-              className="w-[9rem]"
-            >
-              <option value="all">Semua jenis</option>
-              {STATUS.resource.map((t) => (
-                <option key={t} value={t}>
-                  {resourceTypeIcon(t)} {STATUS_LABEL[t]}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={filterTag}
-              onChange={(e) => setFilterTag(e.target.value)}
-              aria-label="Filter tag"
-              className="w-[8.5rem]"
-            >
-              <option value="all">Semua tag</option>
-              {availableTags.map((t) => (
-                <option key={t} value={t}>
-                  #{t}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              aria-label="Filter status baca"
-              className="w-[9.5rem]"
-            >
-              <option value="all">Semua status</option>
-              <option value="not_started">Belum dibaca</option>
-              <option value="reading">Sedang dibaca</option>
-              <option value="completed">Sudah selesai</option>
-            </Select>
-          </div>
+          <FilterPanel
+            activeCount={activeFilterCount}
+            onReset={resetFilters}
+            filters={[
+              {
+                key: 'topic',
+                label: 'Topik',
+                node: (
+                  <Select
+                    value={filterTopic}
+                    onChange={(e) => setFilterTopic(e.target.value)}
+                    aria-label="Filter topik"
+                  >
+                    <option value="all">Semua topik</option>
+                    {orderedTopics.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {'·  '.repeat(t.level)}
+                        {t.title}
+                      </option>
+                    ))}
+                  </Select>
+                )
+              },
+              {
+                key: 'type',
+                label: 'Jenis',
+                node: (
+                  <Select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    aria-label="Filter jenis"
+                  >
+                    <option value="all">Semua jenis</option>
+                    {STATUS.resource.map((t) => (
+                      <option key={t} value={t}>
+                        {STATUS_LABEL[t]}
+                      </option>
+                    ))}
+                  </Select>
+                )
+              },
+              {
+                key: 'tag',
+                label: 'Tag',
+                node: (
+                  <Select
+                    value={filterTag}
+                    onChange={(e) => setFilterTag(e.target.value)}
+                    aria-label="Filter tag"
+                  >
+                    <option value="all">Semua tag</option>
+                    {availableTags.map((t) => (
+                      <option key={t} value={t}>
+                        #{t}
+                      </option>
+                    ))}
+                  </Select>
+                )
+              },
+              {
+                key: 'status',
+                label: 'Status baca',
+                node: (
+                  <Select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    aria-label="Filter status baca"
+                  >
+                    <option value="all">Semua status</option>
+                    <option value="not_started">Belum dibaca</option>
+                    <option value="reading">Sedang dibaca</option>
+                    <option value="completed">Sudah selesai</option>
+                  </Select>
+                )
+              }
+            ]}
+          />
         ) : (
           <span className="font-mono text-[10.5px] uppercase tracking-[.06em] text-dimmer">
             {list.length} resource · klik judul untuk membuka
@@ -187,9 +222,7 @@ export default function ResourcesPanel({ scopeIds = null, presetTopicId = null }
       </div>
 
       {contentLoading && (
-        <div className="flex justify-center py-12">
-          <Spinner size={28} />
-        </div>
+        <PageLoading label="Memuat resource…" />
       )}
       {contentError && <p className="text-[13.5px] text-accent">{contentError}</p>}
 

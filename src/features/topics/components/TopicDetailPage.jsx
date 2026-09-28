@@ -1,10 +1,19 @@
-import { IconDiscuss, IconEmptyNote } from '../../../shared/icons';
+import {
+  IconDiscuss,
+  IconEdit,
+  IconEmptyNote,
+  IconLink,
+  IconNotes,
+  IconPuzzle,
+  IconQuestion,
+  IconTrash
+} from '../../../shared/icons';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpace } from '../../space/hooks/useSpace';
@@ -28,12 +37,29 @@ import { timeAgo } from '../../../shared/utils/time';
 import TopicFormModal from './TopicFormModal';
 import ConfirmModal from './ConfirmModal';
 
+const TAB_ICONS = {
+  notes: IconNotes,
+  resources: IconLink,
+  questions: IconQuestion,
+  quiz: IconPuzzle
+};
+
 const TABS = [
-  { key: 'notes', icon: '📝', label: 'Notes' },
-  { key: 'resources', icon: '🔗', label: 'Resources' },
-  { key: 'questions', icon: '❓', label: 'Questions', placeholder: 'Segera hadir.' },
-  { key: 'quiz', icon: '🧩', label: 'Quiz', placeholder: 'Segera hadir.' }
+  { key: 'notes', label: 'Notes' },
+  { key: 'resources', label: 'Resources' },
+  { key: 'questions', label: 'Questions', placeholder: 'Segera hadir.' },
+  { key: 'quiz', label: 'Quiz', placeholder: 'Segera hadir.' }
 ];
+
+function TabLabel({ tab }) {
+  const Icon = TAB_ICONS[tab.key];
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {Icon && <Icon size={15} />}
+      {tab.label}
+    </span>
+  );
+}
 
 // Halaman detail topik: breadcrumb, batang progres, tab materi.
 export default function TopicDetailPage() {
@@ -145,9 +171,7 @@ export default function TopicDetailPage() {
 
   if (topicsLoading && !topics.length) {
     return (
-      <div className="flex justify-center py-16">
-        <Spinner size={28} />
-      </div>
+      <PageLoading label="Memuat topik…" />
     );
   }
 
@@ -221,10 +245,10 @@ export default function TopicDetailPage() {
               </Button>
             )}
             <Button variant="ghost" onClick={() => setForm({ initial: topic, parent: null })}>
-              ✎ Edit
+              <IconEdit size={16} /> Edit
             </Button>
             <Button variant="danger" onClick={openDelete}>
-              🗑 Hapus
+              <IconTrash size={16} /> Hapus
             </Button>
           </div>
         </div>
@@ -273,7 +297,7 @@ export default function TopicDetailPage() {
                   : 'border-b-transparent text-dim hover:text-ink'
               }`}
             >
-              {t.icon} {t.label}
+              <TabLabel tab={t} />
               {count > 0 && <span className="ml-1 font-mono text-[11px] text-dimmer">{count}</span>}
             </button>
           );
@@ -325,7 +349,14 @@ export default function TopicDetailPage() {
         )}
 
         {(tab === 'questions' || tab === 'quiz') && (
-          <EmptyState icon={active.icon} title={active.label} description={active.placeholder} />
+          <EmptyState
+            icon={(() => {
+              const I = TAB_ICONS[active.key];
+              return I ? <I size={32} /> : <IconEmptyNote size={32} />;
+            })()}
+            title={active.label}
+            description={active.placeholder}
+          />
         )}
       </div>
 

@@ -1,15 +1,21 @@
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
+  onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
-  updateDoc
+  updateDoc,
+  where
 } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
 import { COL, ROOT, SCHEMA_VERSION } from '../../../lib/constants';
 import { normalizeTags } from '../../../shared/utils/validate';
-import { buildTypeFields, normalizeSubQuestions } from '../utils/questionTypeFields';
+import { buildTypeFields, normalizePairDraft, normalizeSubQuestions } from '../utils/questionTypeFields';
+import { normalizeQuestionReport as normalizeQuestionReportInput } from '../utils/questionReport';
 
 /**
  * Menyesuaikan answerIndex saat satu opsi dihapus.
@@ -115,6 +121,15 @@ export async function updateQuestion(spaceId, questionId, data) {
   if (data.acceptedAnswers !== undefined) updates.acceptedAnswers = data.acceptedAnswers;
   if (data.sampleAnswer !== undefined) updates.sampleAnswer = String(data.sampleAnswer);
   if (data.pairs !== undefined) updates.pairs = data.pairs;
+  // Draft editor menjodohkan - HANYA untuk soal tipe `matching`, dan hanya
+  // kalau draft-nya punya struktur yang bisa dipercaya. `null` berarti "hapus
+  // field ini dari dokumen" (Firestore: null = field dihapus), jadi draft rusak
+  // tidak pernah menggantikan draft lama yang masih benar. `pairs` sendiri
+  // tidak pernah diubah bentuknya di sini.
+  if (type === 'matching' && data.pairDraft !== undefined) {
+    const draft = normalizePairDraft(data.pairDraft);
+    updates.pairDraft = draft || null;
+  }
   if (data.items !== undefined) updates.items = data.items;
   if (data.correctValue !== undefined) updates.correctValue = Number(data.correctValue);
   if (data.tolerance !== undefined) updates.tolerance = Number(data.tolerance);
@@ -148,4 +163,45 @@ export async function restoreQuestion(spaceId, questionId) {
 export async function purgeQuestion(spaceId, questionId) {
   const qRef = doc(db, ROOT.spaces, spaceId, COL.questions, questionId);
   await deleteDoc(qRef);
+}
+
+// ---------------------------- report soal ----------------------------
+// Report disimpan sebagai subkoleksi di bawah soal (`questions/{id}/reports`)
+// supaya owner bisa mendengarkannya dengan listener polos tanpa query `in`.
+// Rules menolak report atas soal sendiri dan atas soal yang tidak terlihat.
+
+export async function reportQuestion(spaceId, questionId, type, message) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Pengguna belum masuk.');
+  if (!spaceId || !questionId) throw new Error('ID tidak lengkap.');
+
+  const { type: cleanType, message: cleanMessage } = normalizeQuestionReportInput(type, message);
+
+  // `questionId` ikut disimpan di dalam dokumen walau sudah ada di path, supaya
+  // rules (dan pemeriksaan manual lewat Emulator UI) tidak harus membaca path.
+  await addDoc(collection(db, ROOT.spaces, spaceId, COL.questions, questionId, COL.questionReports), {
+    questionId,
+    reporterId: uid,
+    type: cleanType,
+    message: cleanMessage,
+    createdAt: serverTimestamp(),
+    schemaVersion: SCHEMA_VERSION
+  });
+}
+
+/**
+ * Listener report untuk satu soal. Hanya PEMILIK soal yang boleh `list`
+ * (lihat catatan di firestore.rules), jadi jangan dipakai oleh pelapor.
+ */
+export function subscribeQuestionReports(spaceId, questionId, onData, onError) {
+  if (!spaceId || !questionId) return () => {};
+  const reports = collection(db, ROOT.spaces, spaceId, COL.questions, questionId, COL.questionReports);
+  return onSnapshot(
+    query(reports, orderBy('createdAt', 'desc')),
+    (snap) =>
+      onData(
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      ),
+    onError
+  );
 }

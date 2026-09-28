@@ -2,70 +2,527 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===== Palet "buku catatan / jurnal akademik" (accessed via Tailwind var) ===== */
+/* ============================================================
+   SISTEM TEMA — DUA DIMENSI INDEPENDEN
+   ------------------------------------------------------------
+   Dua atribut di <html>:
+     data-color-theme = tema warna + font (default| pastel| rose| forest| mono| ocean)
+     data-mode        = terang/gelap di DALAM tema itu (light| dark)
+
+   Keduanya independen: 6 × 2 = 12 kombinasi, masing-masing punya blok
+   lengkapnya sendiri di bawah. TEMA TIDAK MENGUBAH STRUKTUR KOMPONEN —
+   Button/Badge/Card/Input tetap sama, hanya NILAI variabel yang berganti.
+   tailwind.config.js meneruskan lewat var(), jadi tidak ada nama warna atau
+   nama font yang ditulis langsung di markup.
+
+   Token per kombinasi:
+     --bg / --bg-elevated / --bg-sunken
+     --text / --text-dim / --text-dimmer
+     --accent / --accent-soft / --accent-solid / --on-accent / --accent-ink
+     --border / --border-strong
+     --ok / --ok-soft / --ok-ink  (+ warn, danger dengan bentuk sama)
+     --glow / --glow-danger / --scrim / --shadow
+
+   Peran warna TIDAK PERNAH tertukar di tema mana pun: accent = aktif/primer,
+   hijau = sukses, kuning = peringatan, merah = error/destruktif. Yang boleh
+   berubah antar tema hanya HUE-nya. "Pastel" dan "Rose" berarti palet lebih
+   lembut — BUKAN izin menambah gradient, glow permanen, shadow berat, atau
+   membulatkan semua radius.
+
+   Kontras: setiap pasangan teks/latar di bawah sudah dihitung dan
+   diverifikasi ≥4.5:1 (WCAG AA teks kecil) di SEMUA 12 kombinasi — kecuali
+   dua pasangan di tema default gelap yang sengaja dibiarkan apa adanya (nilai
+   repo, lihat catatan di blok itu). tests/theme-contrast.test.mjs menjaga
+   daftar & rasio ini, jadi nilai di sini tidak bisa diam-diam diturunkan
+   ke bawah ambang.
+
+   CATATAN SELECTOR: blok warna sengaja TIDAK diawali `:root`, hanya
+   `[data-color-theme=…][data-mode=…]`. Selain <html>, atribut yang sama boleh
+   dipasang pada elemen mana pun — itulah yang dipakai ThemeSwitcher untuk
+   menampilkan pratinjau keenam tema (dengan mode yang sedang aktif) memakai
+   token asli, bukan hex hardcode yang bisa basi. Spesifisitasnya (0,2,0)
+   tetap lebih tinggi dari fallback `:root` (0,1,0).
+   ============================================================ */
 :root {
-  --bg: #1a1714;
-  --bg2: #221e1a;
-  --surface: #221e1a;
-  --panel: #221e1a;
-  --panel2: #2a2520;
-  --text: #ede6da;
-  --text-dim: #b3a996;
-  --text-dimmer: #8f8676;
-  --border: #383029;
-  --border-strong: #4a4036;
-  --accent: #e0704f;
-  --ok: #93b074;
-  --warn: #d9a441;
-  --mandatory-bg: rgba(224, 112, 79, 0.1);
-  --mandatory-border: rgba(224, 112, 79, 0.4);
   --radius: 8px;
   --radius-sm: 6px;
-  --shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
   --font-head: 'Newsreader', Georgia, 'Times New Roman', Cambria, serif;
   --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
+/* ---------- 1. Default (Indigo Minimal) ----------
+   Nilai TIDAK diubah dari skema single-token sebelumnya; hanya dipindah ke
+   struktur dua-dimensi. `:root` ikut ditulis di sini supaya tema ini tetap
+   berlaku SEBELUM inline script berjalan (serta kalau JS dimatikan), tanpa
+   menyalin blok yang sama dua kali.
+
+   Dua pasangan di bawah tetap di bawah 4.5:1 dan itu WARISAN, bukan
+   regresi: `--text-dimmer` 4.47:1 dan `--accent` 4.44:1 di atas
+   `--bg-elevated` (yang 3-4% lebih terang dari `--bg`). Semuanya 4.5:1+
+   di atas `--bg` itu sendiri. Ansel warna status tetap memenuhi peran
+   dan >=4.5:1 terhadap latar yang memakainya.
+   ---------- */
+
+:root,
+[data-color-theme='default'][data-mode='dark'] {
+  --bg: #0a0e14;
+  --bg-elevated: #0d1220;
+  --bg-sunken: #080b11;
+  --text: #e6e9ef;
+  --text-dim: #9aa3b5;
+  --text-dimmer: #737c91;
+  --accent: #5b6ef5;
+  --accent-soft: rgba(91, 110, 245, 0.12);
+  /* `--accent-solid` hanya untuk isian benar-benar solid (MatchingBoard).
+     Teks di atasnya memakai `--on-accent`: putih di atas #5b6ef5 hanya
+     4.21:1 — gagal AA untuk teks kecil; di atas nilai solid ini 6.07:1. */
+  --accent-solid: #4553d6;
+  --on-accent: #ffffff;
+
+  /* Token "ink" = warna TEKS status di atas isian `*-soft` (Badge, Button,
+     StatusNote). `--accent`/`--danger` juga dipakai untuk garis & ikon yang
+     tidak menuntut 4.5:1 sebagai teks kecil. */
+  --accent-ink: #7f8dff;
+  --border: #232838;
+  --border-strong: #323950;
+  --ok: #4dd48a;
+  --ok-soft: rgba(77, 212, 138, 0.12);
+  --ok-ink: #4dd48a;
+  --warn: #e0a640;
+  --warn-soft: rgba(224, 166, 64, 0.12);
+  --warn-ink: #e0a640;
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.12);
+  --danger-ink: #f46065;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(91, 110, 245, 0.25);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(229, 72, 77, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
   color-scheme: dark;
 }
 
-html.dark {
-  --bg: #1a1714;
-  --bg2: #221e1a;
-  --surface: #221e1a;
-  --panel: #221e1a;
-  --panel2: #2a2520;
-  --text: #ede6da;
-  --text-dim: #b3a996;
-  --text-dimmer: #8f8676;
-  --border: #383029;
-  --border-strong: #4a4036;
-  --accent: #e0704f;
-  --ok: #93b074;
-  --warn: #d9a441;
-  --mandatory-bg: rgba(224, 112, 79, 0.1);
-  --mandatory-border: rgba(224, 112, 79, 0.4);
-  color-scheme: dark;
-}
+[data-color-theme='default'][data-mode='light'] {
+  --bg: #f7f8fb;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f1f3f7;
+  --text: #12151c;
+  --text-dim: #5c6478;
+  --text-dimmer: #666e80;
+  --accent: #3a45b8;
+  --accent-soft: rgba(58, 69, 184, 0.08);
+  --accent-solid: #4553d6;
+  --on-accent: #ffffff;
 
-:root[data-theme='light'] {
-  --bg: #f6f1e7;
-  --bg2: #fbf8f1;
-  --surface: #fbf8f1;
-  --panel: #fbf8f1;
-  --panel2: #f1ebdd;
-  --text: #1f1b16;
-  --text-dim: #5c544a;
-  --text-dimmer: #6e665b;
-  --border: #ddd4c4;
-  --border-strong: #c9beaa;
-  --accent: #b5482a;
-  --ok: #4f6b3a;
-  --warn: #b7791f;
-  --mandatory-bg: rgba(181, 72, 42, 0.07);
-  --mandatory-border: rgba(181, 72, 42, 0.35);
+  /* Di light, warna status dipakai juga sebagai TEKS polos di atas permukaan
+     terang (tab aktif, label nav, "tersimpan", pesan validasi), jadi nilainya
+     diturunkan sampai >=4.5:1 — bukan 3.4-4.2:1 seperti aslinya. */
+  --accent-ink: #3a45b8;
+  --border: #d7dbe4;
+  --border-strong: #c0c6d4;
+  --ok: #15794a;
+  --ok-soft: rgba(21, 121, 74, 0.08);
+  --ok-ink: #15794a;
+  --warn: #8a5a12;
+  --warn-soft: rgba(138, 90, 18, 0.08);
+  --warn-ink: #8a5a12;
+  --danger: #b3282f;
+  --danger-soft: rgba(179, 40, 47, 0.08);
+  --danger-ink: #b3282f;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(58, 69, 184, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(207, 47, 54, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
   color-scheme: light;
 }
 
+/* ---------- 2. Pastel (Lavender Study) ----------
+   Anchor desain: bg #faf7fc / text #2d2438 / accent #9b7fd4 / ok #5fb88a /
+   warn #d4a15f / danger #d97a86 (light) dan #1c1725 / #ede7f4 / #b39ddb /
+   #7bc9a0 / #e0b378 / #e6919c (dark). Anchor accent & status di LIGHT
+   hanya 2.3-2.6:1 sebagai teks, jadi lightness-nya digeser (hue tetap
+   lavender/hijau/kuning/merah) sampai >=4.5:1.
+   ---------- */
+
+[data-color-theme='pastel'][data-mode='light'] {
+  --bg: #faf7fc;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f3f0f4;
+  --text: #2d2438;
+  --text-dim: #6b5e7a;
+  --text-dimmer: #6c5f7b;
+  --accent: #7c5db4;
+  --accent-soft: rgba(128, 99, 182, 0.12);
+  --accent-solid: #8063b6;
+  --on-accent: #ffffff;
+  --accent-ink: #7556ac;
+  --border: #e5dcf0;
+  --border-strong: #c8bfd2;
+  --ok: #1a7c52;
+  --ok-soft: rgba(26, 124, 82, 0.1);
+  --ok-ink: #1a764f;
+  --warn: #94641e;
+  --warn-soft: rgba(148, 100, 30, 0.1);
+  --warn-ink: #8c601e;
+  --danger: #ab515e;
+  --danger-soft: rgba(171, 81, 94, 0.1);
+  --danger-ink: #a34e5b;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(128, 99, 182, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(171, 81, 94, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+[data-color-theme='pastel'][data-mode='dark'] {
+  --bg: #1c1725;
+  --bg-elevated: #251e30;
+  --bg-sunken: #1b1624;
+  --text: #ede7f4;
+  --text-dim: #b3a3c4;
+  --text-dimmer: #b2a2c3;
+  --accent: #b39ddb;
+  --accent-soft: rgba(179, 157, 219, 0.16);
+  --accent-solid: #b39ddb;
+  --on-accent: #000000;
+  --accent-ink: #b49edc;
+  --border: #3a3048;
+  --border-strong: #453b54;
+  --ok: #7ccaa1;
+  --ok-soft: rgba(124, 202, 161, 0.14);
+  --ok-ink: #7ccaa1;
+  --warn: #e1b479;
+  --warn-soft: rgba(225, 180, 121, 0.14);
+  --warn-ink: #e1b479;
+  --danger: #e7929d;
+  --danger-soft: rgba(231, 146, 157, 0.14);
+  --danger-ink: #e7929d;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(179, 157, 219, 0.25);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(231, 146, 157, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: dark;
+}
+
+/* ---------- 3. Rose (Dusty Rosewood) ----------
+   Arah: dark, warm, elegant, muted — charcoal plum + dusty rose, BUKAN
+   hot pink / red neon. Accent diturunkan saturation-nya (dulu HSL 347/57%,
+   kini 345/30%) supaya identitas "rose" tetap terbaca tanpa menyilaukan;
+   keterbacaan dijaga lewat lightness, bukan lewat menyalakan warna.
+   Anchor: #faf6f4 / #33262a / #965560 / #5fa877 / #c99548 / #c74747 (light),
+   #1f1a1d / #ece3e1 / #cda2ad / #7fc494 / #dba968 / #e07373 (dark).
+   Token status (--ok/--warn/--danger + -soft/-ink) sengaja TIDAK disentuh:
+   hijau/amber/merah harus tetap terbaca sebagai STATUS, bukan dekorasi tema.
+   ---------- */
+
+[data-color-theme='rose'][data-mode='light'] {
+  --bg: #faf6f4;
+  --bg-elevated: #fffdfc;
+  --bg-sunken: #f3ece9;
+  --text: #33262a;
+  --text-dim: #6d595d;
+  --text-dimmer: #766265;
+  --accent: #965560;
+  --accent-soft: rgba(150, 85, 96, 0.1);
+  --accent-solid: #8b4b5b;
+  --on-accent: #fdf8f6;
+  --accent-ink: #8a4a5a;
+  --border: #e8dcd8;
+  --border-strong: #d5c4bf;
+  --ok: #317b4d;
+  --ok-soft: rgba(49, 123, 77, 0.1);
+  --ok-ink: #2e754a;
+  --warn: #946303;
+  --warn-soft: rgba(148, 99, 3, 0.1);
+  --warn-ink: #8c5f03;
+  --danger: #c04041;
+  --danger-soft: rgba(192, 64, 65, 0.1);
+  --danger-ink: #b53c3d;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(150, 85, 96, 0.15);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(192, 64, 65, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+[data-color-theme='rose'][data-mode='dark'] {
+  --bg: #1f1a1d;
+  --bg-elevated: #262025;
+  --bg-sunken: #171317;
+  --text: #ece3e1;
+  --text-dim: #bcaaa6;
+  --text-dimmer: #ab9a97;
+  --accent: #cda2ad;
+  --accent-soft: rgba(205, 162, 173, 0.15);
+  --accent-solid: #a8536b;
+  --on-accent: #fbf3f1;
+  --accent-ink: #cb9ca8;
+  --border: #35292f;
+  --border-strong: #473840;
+  --ok: #80c595;
+  --ok-soft: rgba(128, 197, 149, 0.14);
+  --ok-ink: #80c595;
+  --warn: #dcaa69;
+  --warn-soft: rgba(220, 170, 105, 0.14);
+  --warn-ink: #dcaa69;
+  --danger: #e47777;
+  --danger-soft: rgba(228, 119, 119, 0.14);
+  --danger-ink: #e47777;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(205, 162, 173, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(228, 119, 119, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: dark;
+}
+
+/* ---------- 4. Forest (Sage Calm) ----------
+   Anchor: #f6f8f4 / #232b1f / #5f8c5a / #4a9d6e / #c99a45 / #bd5b4f (light),
+   #161d14 / #e4ecdf / #84b078 / #6fc490 / #d6ac6a / #d17a6d (dark).
+   `--ok` sengaja hue lebih biru dari `--accent` sage supaya "sukses" tetap
+   terbaca sebagai STATUS, bukan sekadar dekorasi warna hijau yang sama.
+   ---------- */
+
+[data-color-theme='forest'][data-mode='light'] {
+  --bg: #f6f8f4;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #eff1ed;
+  --text: #232b1f;
+  --text-dim: #5c6b54;
+  --text-dimmer: #5d6c55;
+  --accent: #4d7648;
+  --accent-soft: rgba(80, 124, 75, 0.12);
+  --accent-solid: #507c4b;
+  --on-accent: #ffffff;
+  --accent-ink: #477042;
+  --border: #dde5d8;
+  --border-strong: #bcc4b7;
+  --ok: #257c4f;
+  --ok-soft: rgba(37, 124, 79, 0.1);
+  --ok-ink: #22764c;
+  --warn: #926500;
+  --warn-soft: rgba(146, 101, 0, 0.1);
+  --warn-ink: #8a6000;
+  --danger: #b05044;
+  --danger-soft: rgba(176, 80, 68, 0.1);
+  --danger-ink: #a74d41;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(80, 124, 75, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(176, 80, 68, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+[data-color-theme='forest'][data-mode='dark'] {
+  --bg: #161d14;
+  --bg-elevated: #1e261b;
+  --bg-sunken: #151c13;
+  --text: #e4ecdf;
+  --text-dim: #a8bb9f;
+  --text-dimmer: #a7ba9e;
+  --accent: #84b078;
+  --accent-soft: rgba(132, 176, 120, 0.16);
+  --accent-solid: #84b078;
+  --on-accent: #000000;
+  --accent-ink: #85b179;
+  --border: #324a2c;
+  --border-strong: #344c2e;
+  --ok: #70c591;
+  --ok-soft: rgba(112, 197, 145, 0.14);
+  --ok-ink: #70c591;
+  --warn: #d7ad6b;
+  --warn-soft: rgba(215, 173, 107, 0.14);
+  --warn-ink: #d7ad6b;
+  --danger: #dc8476;
+  --danger-soft: rgba(220, 132, 118, 0.14);
+  --danger-ink: #dc8476;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(132, 176, 120, 0.25);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(220, 132, 118, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: dark;
+}
+
+/* ---------- 5. Monochrome (Ink & Paper) ----------
+   Anchor: #fafafa / #0f0f0f / #1a1a1a / #3a7d4f / #a67c2e / #a83e3e (light),
+   #0d0d0d / #f2f2f2 / #f2f2f2 / #5fa876 / #c99a4d / #c96363 (dark).
+   Aksen TIDAK memakai hue: "warna aktif" dibentuk lewat kontras saja —
+   nyaris hitam di light, putih di dark. Hijau/kuning/merah di sini adalah
+   satu-satunya titik warna asli, sengaja dibiarkan supaya status tetap
+   jelas dan tidak ikut jadi abu-abu.
+   ---------- */
+
+[data-color-theme='mono'][data-mode='light'] {
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f3f3f3;
+  --text: #0f0f0f;
+  --text-dim: #5a5a5a;
+  --text-dimmer: #5b5b5b;
+  --accent: #1a1a1a;
+  --accent-soft: rgba(26, 26, 26, 0.08);
+  --accent-solid: #1a1a1a;
+  --on-accent: #ffffff;
+  --accent-ink: #191919;
+  --border: #dcdcdc;
+  --border-strong: #c5c5c5;
+  --ok: #397c4e;
+  --ok-soft: rgba(57, 124, 78, 0.08);
+  --ok-ink: #37784c;
+  --warn: #916814;
+  --warn-soft: rgba(145, 104, 20, 0.08);
+  --warn-ink: #8d6414;
+  --danger: #a73d3d;
+  --danger-soft: rgba(167, 61, 61, 0.08);
+  --danger-ink: #a73d3d;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(26, 26, 26, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(167, 61, 61, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+[data-color-theme='mono'][data-mode='dark'] {
+  --bg: #0d0d0d;
+  --bg-elevated: #161616;
+  --bg-sunken: #0d0d0d;
+  --text: #f2f2f2;
+  --text-dim: #a3a3a3;
+  --text-dimmer: #a2a2a2;
+  --accent: #f2f2f2;
+  --accent-soft: rgba(242, 242, 242, 0.1);
+  --accent-solid: #f2f2f2;
+  --on-accent: #000000;
+  --accent-ink: #f3f3f3;
+  --border: #2b2b2b;
+  --border-strong: #393939;
+  --ok: #60a977;
+  --ok-soft: rgba(96, 169, 119, 0.1);
+  --ok-ink: #60a977;
+  --warn: #ca9b4e;
+  --warn-soft: rgba(202, 155, 78, 0.1);
+  --warn-ink: #ca9b4e;
+  --danger: #d06969;
+  --danger-soft: rgba(208, 105, 105, 0.1);
+  --danger-ink: #d06969;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(242, 242, 242, 0.25);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(208, 105, 105, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: dark;
+}
+
+/* ---------- 6. Ocean (Teal Depth) ----------
+   Anchor: #f4f9fa / #182b2d / #2a8f96 / #4c9d6a / #c99a45 / #c15656 (light),
+   #0d1a1c / #e2f0f1 / #4dbcc4 / #6fbd8a / #d6ac6a / #d17272 (dark).
+   Opsi "dingin" selain indigo default.
+   ---------- */
+
+[data-color-theme='ocean'][data-mode='light'] {
+  --bg: #f4f9fa;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #edf2f3;
+  --text: #182b2d;
+  --text-dim: #4f6b6e;
+  --text-dimmer: #506c6f;
+  --accent: #0c787f;
+  --accent-soft: rgba(12, 126, 133, 0.1);
+  --accent-solid: #0c7e85;
+  --on-accent: #ffffff;
+  --accent-ink: #00737a;
+  --border: #d7e7e9;
+  --border-strong: #b6c6c8;
+  --ok: #287c4b;
+  --ok-soft: rgba(40, 124, 75, 0.1);
+  --ok-ink: #257648;
+  --warn: #926500;
+  --warn-soft: rgba(146, 101, 0, 0.1);
+  --warn-ink: #8a6000;
+  --danger: #b44a4b;
+  --danger-soft: rgba(180, 74, 75, 0.1);
+  --danger-ink: #ab4748;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(12, 126, 133, 0.18);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(180, 74, 75, 0.16);
+  --scrim: rgba(18, 21, 28, 0.4);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+[data-color-theme='ocean'][data-mode='dark'] {
+  --bg: #0d1a1c;
+  --bg-elevated: #132528;
+  --bg-sunken: #0d191b;
+  --text: #e2f0f1;
+  --text-dim: #9ec0c3;
+  --text-dimmer: #9dbfc2;
+  --accent: #4dbcc4;
+  --accent-soft: rgba(77, 188, 196, 0.16);
+  --accent-solid: #4dbcc4;
+  --on-accent: #000000;
+  --accent-ink: #4ebdc5;
+  --border: #264143;
+  --border-strong: #284345;
+  --ok: #70be8b;
+  --ok-soft: rgba(112, 190, 139, 0.14);
+  --ok-ink: #70be8b;
+  --warn: #d7ad6b;
+  --warn-soft: rgba(215, 173, 107, 0.14);
+  --warn-ink: #d7ad6b;
+  --danger: #dd7c7c;
+  --danger-soft: rgba(221, 124, 124, 0.14);
+  --danger-ink: #dd7c7c;
+  --glow: 0 0 0 1px var(--accent), 0 0 12px rgba(77, 188, 196, 0.25);
+  --glow-danger: 0 0 0 1px var(--danger), 0 0 12px rgba(221, 124, 124, 0.2);
+  --scrim: rgba(4, 6, 10, 0.7);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color-scheme: dark;
+}
+
+/* ============================================================
+   FONT PER TEMA — ditulis DI LUAR blok mode karena font tidak
+   berubah antara terang dan gelap; hanya warnanya. Ditaruh setelah
+   blok warna supaya menimpa fallback `:root` di atas pada
+   spesifisitas yang sama.
+
+   Ganti tema -> tiga variabel ini ikut berubah -> `font-head/body/mono`
+   di tailwind.config.js meneruskannya lewat var(), jadi TIDAK ada
+   className di komponen yang perlu disentuh. File font-nya sendiri
+   dimuat lazy oleh src/app/themeFonts.js (hanya tema yang aktif; tema
+   default sudah preload di index.html karena itu tema awal).
+   ============================================================ */
+[data-color-theme='default'] {
+  --font-head: 'Newsreader', Georgia, 'Times New Roman', Cambria, serif;
+  --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
+
+[data-color-theme='pastel'] {
+  --font-head: 'Bricolage Grotesque', 'Segoe UI', Roboto, system-ui, sans-serif;
+  --font-body: 'Nunito Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'Space Mono', 'Courier New', Consolas, ui-monospace, monospace;
+}
+
+[data-color-theme='rose'] {
+  --font-head: 'Petrona', Georgia, 'Times New Roman', Cambria, serif;
+  --font-body: 'Karla', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
+
+[data-color-theme='forest'] {
+  --font-head: 'Source Serif 4', Georgia, Cambria, 'Times New Roman', serif;
+  --font-body: 'Work Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
+
+[data-color-theme='mono'] {
+  --font-head: 'Archivo', 'Segoe UI', Roboto, system-ui, sans-serif;
+  --font-body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
+
+[data-color-theme='ocean'] {
+  --font-head: 'Spectral', Georgia, Cambria, 'Times New Roman', serif;
+  --font-body: 'Libre Franklin', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, 'Courier New', ui-monospace, monospace;
+}
 /* ===== Base ===== */
 @layer base {
   html {
@@ -117,12 +574,63 @@ html.dark {
      min-height: 44px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
-    background: var(--bg2);
+    background: var(--bg-elevated);
     color: var(--text-dim);
     font-size: 16px;
-    transition: color 0.18s, border-color 0.18s;
+    transition: color 0.18s, border-color 0.18s, box-shadow 0.18s;
   }
    .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+   .icon-btn:active { box-shadow: var(--glow); }
+
+  /* ===== Panel filter (FilterPanel.jsx) =====
+    Empat animasi: masuk & keluar, untuk sheet dan popover.
+       - .sheet-in / .sheet-out : bottom sheet naik / turun
+       - .pop-in   / .pop-out   : popover desktop muncul / menghilang
+    Animasi KELUAR butuh state `closing` di komponen: panel harus tetap
+    ter-mount selama animasi berjalan, baru di-unmount setelahnya. */
+  @keyframes sheet-rise {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+  @keyframes sheet-sink {
+    from { transform: translateY(0); }
+    to { transform: translateY(100%); }
+  }
+  @keyframes pop-rise {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pop-fade {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-4px); }
+  }
+  /* Sheet keluar sedikit lebih cepat daripada masuk: menutup terasa lebih
+     ringan daripada membuka, dan tidak menahan pengguna terlalu lama. */
+  .sheet-in {
+    animation: sheet-rise 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .sheet-out {
+    animation: sheet-sink 160ms ease-in;
+    will-change: transform;
+  }
+  .pop-in {
+    animation: pop-rise 150ms ease-out;
+  }
+  .pop-out {
+    animation: pop-fade 120ms ease-in;
+    /* `forwards` WAJIB: tanpa itu opacity kembali ke 1 tepat saat animasi
+       berakhir, jadi panel berkedip penuh sesaat sebelum di-unmount. */
+    animation-fill-mode: forwards;
+  }
+  .sheet-backdrop {
+    animation: pop-rise 200ms ease-out;
+  }
+  .sheet-backdrop-out {
+    animation: pop-fade 160ms ease-in;
+    animation-fill-mode: forwards;
+  }
+
    .chart-wrap {
      width: 100%;
      overflow: visible;
@@ -158,15 +666,59 @@ html.dark {
      .app-main { padding-bottom: 2.5rem; }
    }
 
-   /* Elemen konten besar: tanpa kotak/bayangan, hanya "garis kertas"
-     (border-bottom) — seperti daftar di jurnal, bukan tumpukan kartu. */
+   /* Tooltip (shared/ui/Tooltip.jsx): masuk halus, tanpa shadow — kedalaman
+     datang dari border saja, sesuai prinsip "tanpa shadow lembut berlebihan". */
+  @keyframes tt-in {
+    from { opacity: 0; transform: translate(-4px, -50%); }
+    to   { opacity: 1; transform: translate(0, -50%); }
+  }
+  .tooltip-pop { animation: tt-in 120ms ease-out; }
+
+  /* Rail navigasi desktop: transisi lebar + label yang tidak ikut terjepit.
+     - .rail-label: opacity 0 -> 1 dengan delay 80ms saat MELEBAR (label baru
+       muncul setelah ruang di kanannya hampir penuh, ~80% dari 200ms).
+     - Saat MENCIUT delay balik ke 0 (atribut data turun ke false), jadi
+       label hilang duluan sebelum lebar menyusut: tidak pernah "terjepit".
+     - Label SELALU di-mount (tidak di-condisikan) — kalau di-unmount, tidak
+       ada transisi sama sekali karena elemen baru mulai langsung opacity 1.
+     - overflow-x hidden supaya label opacity-0 tidak memicu scrollbar. */
+  .rail {
+    transition: width 200ms ease;
+    overflow-x: hidden;
+  }
+  .rail-label {
+    opacity: 0;
+    transition: opacity 150ms ease;
+    transition-delay: 0ms;
+    white-space: nowrap;
+    line-height: 1;
+  }
+  .rail[data-expanded='true'] .rail-label {
+    opacity: 1;
+    transition-delay: 80ms;
+  }
+  /* Scrollbar disembunyikan secara visual tapi rail tetap bisa digulir. */
+  .rail-scroll { scrollbar-width: none; }
+  .rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
+
+  /* Elemen konten besar: TIDAK mengambang. Background menyatu dengan
+     halaman, dipisahkan hanya garis tipis — seperti daftar di jurnal.
+     Kotak yang terasa "mengambang" disimpan untuk elemen kecil
+     (lihat .box-sm di bawah). */
   .card {
-    background: none;
+    background: var(--bg);
     border: none;
     border-radius: 0;
     border-bottom: 1px solid var(--border);
     padding: 18px 0;
     box-shadow: none;
+  }
+  /* Dua-tingkat kotak: hanya elemen kecil yang butuh terasa "kotak".
+     Bedanya dari --bg sengaja tipis (~3-5% lightness), bukan blok warna. */
+  .box-sm {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
   }
 
   /* Label seksi + eyebrow: mono, uppercase, spasi huruf lebar */
@@ -225,13 +777,13 @@ html.dark {
 .md-body code {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  background: var(--bg2);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.1em 0.35em;
 }
 .md-body pre {
-  background: var(--bg2);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 12px;
@@ -275,7 +827,7 @@ html.dark {
   margin-top: 6px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: var(--bg2);
+  background: var(--bg-sunken);
 }
 .md-source-render,
 .md-source-input {
@@ -328,7 +880,7 @@ html.dark {
 .md-source code {
   font-family: var(--font-mono);
   font-size: 0.9em;
-  background: var(--panel2);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 3px;

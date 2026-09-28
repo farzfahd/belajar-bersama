@@ -1,5 +1,7 @@
+import { IconSettings, IconThemeDark, IconThemeLight } from '../../../shared/icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
 import Avatar from '../../../shared/components/Avatar';
 import Badge from '../../../shared/ui/Badge';
 import Button from '../../../shared/ui/Button';
@@ -18,7 +20,9 @@ import {
   updateProfile
 } from '../../auth/services/authService';
 import InviteCard from '../../space/components/InviteCard';
+import ThemeSwitcher from './ThemeSwitcher';
 import Modal from '../../../shared/ui/Modal';
+import ConfirmDialog from '../../../shared/ui/ConfirmDialog';
 import {
   AFTER_LEAVE_ROUTE,
   LEAVE_CONSEQUENCES,
@@ -66,7 +70,7 @@ export default function SettingsPage() {
   const { data: space, pending } = useSpace(spaceId);
   const roles = spaceRoles(space, user?.uid);
   const partner = useUserProfile(roles?.partner);
-  const { theme, setTheme } = useTheme();
+  const { mode, setMode } = useTheme();
   const { data: topics } = useTopics(spaceId);
   const { data: notes } = useNotes(spaceId);
   const { data: noteStates } = useNoteStates(spaceId);
@@ -74,6 +78,7 @@ export default function SettingsPage() {
   const { data: resourceStates } = useResourceStates(spaceId);
   const [deleting, setDeleting] = useState(false);
   const [deletePhrase, setDeletePhrase] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   // ---- Profil ----
   const [name, setName] = useState('');
@@ -198,35 +203,45 @@ export default function SettingsPage() {
     toast.success('Export JSON diunduh ke perangkat ini.');
   };
 
-  const deleteAccount = async () => {
-    if (deletePhrase !== 'HAPUS AKUN') {
-      toast.error('Ketik HAPUS AKUN untuk mengonfirmasi.');
-      return;
-    }
-    if (!window.confirm('Hapus materi pribadi dan akun ini secara permanen? Tindakan ini tidak dapat dibatalkan.')) return;
+  // Aksi penghapusan akun: dua langkah, konfirmasi lalu JALANKAN. `window.confirm`
+  // dihapus supaya destruktif ini memakai dialog yang sama dengan aksi lain dan
+  // bisa menjelaskan konsekuensinya. Kegagalan TIDAK menutup dialog — errornya
+  // ditampilkan di dalamnya supaya pengguna tahu akun belum terhapus.
+  const runDeleteAccount = async () => {
     setDeleting(true);
     try {
       await deletePersonalContent(spaceId, user.uid, { notes, resources, noteStates, resourceStates });
       await deleteAccountAfterContentCleanup();
       navigate('/', { replace: true });
-    } catch (err) {
-      toast.error(toErrorMessage(err, 'Gagal menghapus akun. Jika diminta, masuk ulang lalu coba lagi.'));
     } finally {
       setDeleting(false);
     }
+  };
+
+  const requestDeleteAccount = () => {
+    if (deletePhrase !== 'HAPUS AKUN') {
+      toast.error('Ketik HAPUS AKUN untuk mengonfirmasi.');
+      return;
+    }
+    setDeleteConfirm({
+      title: 'Hapus akun dan materi pribadi?',
+      body: 'Catatan, resource, dan status baca milikmu akan dihapus permanen, lalu akun ini dihapus dari Firebase Auth. Materi partner dan ruang bersama tidak disentuh. Tindakan ini tidak bisa dibatalkan.',
+      confirmLabel: 'Hapus akun',
+      danger: true,
+      onConfirm: runDeleteAccount
+    });
   };
 
   const previewEmoji = avatar.trim();
 
   return (
     <div className="space-y-8">
-      <header className="card flex flex-col gap-1">
-        <div className="eyebrow">learning berdua · pengaturan</div>
-        <h1 className="font-head text-2xl text-ink">⚙️ Settings</h1>
-        <p className="text-[13.5px] leading-relaxed text-dim">
-          Profil, ruang, tampilan, dan keamanan akun Anda.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="learning berdua · pengaturan"
+        icon={<IconSettings size={26} />}
+        title="Settings"
+        description="Profil, ruang, tampilan, dan keamanan akun Anda."
+      />
 
       {/* Profil */}
       <Section title="Profil" eyebrow="nama tampilan · avatar · warna identitas">
@@ -236,7 +251,9 @@ export default function SettingsPage() {
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full font-head text-lg"
             style={{
               backgroundColor: `${color}22`,
-              color,
+              // Sama seperti Avatar: warna identitas polos hanya ~2:1 di atas
+              // isian pucatnya saat light.
+              color: `color-mix(in srgb, ${color} 50%, var(--text))`,
               boxShadow: `inset 0 0 0 1px ${color}55`
             }}
           >
@@ -397,21 +414,27 @@ export default function SettingsPage() {
         )}
       </Section>
 
-      {/* Tampilan */}
-      <Section title="Tampilan" eyebrow="tema terang / gelap">
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant={theme === 'dark' ? 'primary' : 'ghost'}
-            onClick={() => setTheme('dark')}
-          >
-            🌙 Gelap
-          </Button>
-          <Button
-            variant={theme === 'light' ? 'primary' : 'ghost'}
-            onClick={() => setTheme('light')}
-          >
-            ☀️ Terang
-          </Button>
+      {/* Tampilan — dua sumbu terpisah: tema (warna+font) di atas, mode
+          terang/gelap di bawah. Keduanya independen, jadi memilih tema tidak
+          mereset mode. */}
+      <Section title="Tampilan" eyebrow="tema warna + mode terang / gelap">
+        <ThemeSwitcher />
+        <div>
+          <div className="eyebrow mb-2 block">Mode</div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={mode === 'dark' ? 'primary' : 'ghost'}
+              onClick={() => setMode('dark')}
+            >
+              <IconThemeDark size={15} /> Gelap
+            </Button>
+            <Button
+              variant={mode === 'light' ? 'primary' : 'ghost'}
+              onClick={() => setMode('light')}
+            >
+              <IconThemeLight size={15} /> Terang
+            </Button>
+          </div>
         </div>
       </Section>
 
@@ -460,12 +483,14 @@ export default function SettingsPage() {
               placeholder="HAPUS AKUN"
               aria-label="Konfirmasi hapus akun"
             />
-            <Button variant="danger" loading={deleting} onClick={deleteAccount}>
+            <Button variant="danger" loading={deleting} onClick={requestDeleteAccount}>
               Hapus akun
             </Button>
           </div>
         </div>
       </Section>
+
+      <ConfirmDialog action={deleteConfirm} onClose={() => setDeleteConfirm(null)} />
     </div>
   );
 }

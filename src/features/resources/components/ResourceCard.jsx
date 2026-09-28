@@ -1,3 +1,4 @@
+import { IconEdit, IconPlay, IconTrash } from '../../../shared/icons';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Badge from '../../../shared/ui/Badge';
@@ -9,13 +10,13 @@ import { STATUS_LABEL } from '../../../lib/constants';
 import { timeAgo } from '../../../shared/utils/time';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import { setResourceState } from '../services/resourceService';
-import { resourceTypeIcon } from '../utils/icons';
+import ResourceTypeIcon from './ResourceTypeIcon';
 import YouTubeThumb from './YouTubeThumb';
 
 function OwnerChip({ name, color, title }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 py-0.5 pl-1 pr-2"
+      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-elevated py-0.5 pl-1 pr-2"
       title={title}
     >
       <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
@@ -57,14 +58,14 @@ export default function ResourceCard({
   };
 
   return (
-    <article className="card space-y-2.5 !py-4">
+    <article className="card space-y-2.5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
           {resource.type === 'youtube' ? (
             <YouTubeThumb url={resource.url} type={resource.type} className="h-9 w-16" />
           ) : (
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-smc border border-line text-[15px]">
-              {resourceTypeIcon(resource.type)}
+              <ResourceTypeIcon type={resource.type} size={16} />
             </span>
           )}
           <div className="min-w-0">
@@ -138,7 +139,7 @@ export default function ResourceCard({
           )}
           <Badge tone={statusTone(resource.difficulty)}>{statusLabel(resource.difficulty)}</Badge>
           {partnerState?.status === 'completed' && <Badge tone="ok">✓ selesai partner</Badge>}
-          {partnerState?.status === 'reading' && <Badge tone="warn">▶ dibaca partner</Badge>}
+          {partnerState?.status === 'reading' && <Badge tone="warn"><IconPlay size={12} /> dibaca partner</Badge>}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -170,18 +171,18 @@ export default function ResourceCard({
                   : 'border-line bg-bg2 text-dim'
               }`}
             >
-              ▶ Sedang dibaca
+              <IconPlay size={15} /> Sedang dibaca
             </button>
             {busy && <Spinner size={12} />}
           </div>
           {resource.addedBy === me && (
             <Button variant="ghost" size="sm" onClick={() => onEdit?.(resource)}>
-              ✎ Edit
+              <IconEdit size={15} /> Edit
             </Button>
           )}
           {resource.addedBy === me && (
             <Button variant="danger" size="sm" onClick={() => onDelete?.(resource)}>
-              🗑
+              <IconTrash size={15} />
             </Button>
           )}
         </div>

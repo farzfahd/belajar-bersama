@@ -1,3 +1,4 @@
+import { IconMail } from '../../../shared/icons';
 import { useCallback, useEffect, useState } from 'react';
 import Button from '../../../shared/ui/Button';
 import { useToast } from '../../../shared/components/ToastProvider';
@@ -82,7 +83,7 @@ export default function VerifyScreen({ user, onVerified }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4 py-10">
       <div className="view-in card w-full max-w-sm space-y-4 text-center">
-        <div className="text-3xl" aria-hidden="true">📧</div>
+        <div className="flex justify-center text-dimmer" aria-hidden="true"><IconMail size={30} /></div>
         <h1 className="font-head text-lg text-ink">Verifikasi email dulu</h1>
         <p className="text-[13.5px] leading-relaxed text-dim">
           Kami kirim link verifikasi ke <span className="text-ink">{user?.email}</span>.

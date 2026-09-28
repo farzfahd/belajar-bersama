@@ -28,7 +28,8 @@ function requireBool(value, label) {
 
 /**
  * Membersihkan & memvalidasi snapshot `questionIds`.
- * - wajib berupa array dengan 1..50 id
+ * - wajib berupa array dengan 0..50 id. **0 itu sah**: kuis boleh dibuat dulu
+ *   tanpa soal (draft), lalu soal ditambahkan dari Quiz Editor.
  * - setiap id: string, non-kosong setelah trim, maksimal 100 karakter
  * - duplikat ditolak (bukan dihapus diam-diam) supaya kuis tidak diam-diam
  *   berbeda dari yang ditulis pengguna
@@ -39,9 +40,6 @@ function requireBool(value, label) {
  */
 export function normalizeQuestionIds(input) {
   if (!Array.isArray(input)) throw new Error('Daftar soal kuis tidak valid.');
-  if (input.length < QUIZ_LIMITS.minQuestions) {
-    throw new Error(`Kuis harus memiliki minimal ${QUIZ_LIMITS.minQuestions} soal.`);
-  }
   if (input.length > QUIZ_LIMITS.maxQuestions) {
     throw new Error(`Kuis maksimal ${QUIZ_LIMITS.maxQuestions} soal.`);
   }
@@ -73,9 +71,12 @@ export function normalizeQuizSettings(input) {
     if (!(key in QUIZ_SETTINGS_DEFAULTS)) delete s[key];
   }
 
-  const questionCount = requireInt(
-    s.questionCount, 'Jumlah soal', QUIZ_LIMITS.minQuestions, QUIZ_LIMITS.maxQuestions
-  );
+  // CATATAN CP2: `questionCount` tidak lagi menjadi bagian settings. Jumlah
+  // soal = panjang `questionIds`. field lama yang masih tersimpan di dokumen
+  // kuis DIBUANG diam-diam di sini (bukan ditulis ulang), supaya dokumen lama
+  // tetap bisa disimpan tanpa error rules yang kini menolak key itu.
+  delete s.questionCount;
+
   const timeLimitMinutes = requireInt(s.timeLimitMinutes, 'Batas waktu', 0, QUIZ_LIMITS.maxTimeLimitMinutes);
   const passingScorePercent = requireInt(s.passingScorePercent, 'Nilai kelulusan', 0, 100);
   const maxAttempts = requireInt(s.maxAttempts, 'Batas percobaan', 1, QUIZ_LIMITS.maxAttempts);
@@ -86,7 +87,6 @@ export function normalizeQuizSettings(input) {
   }
 
   return {
-    questionCount,
     randomizeQuestionOrder: requireBool(s.randomizeQuestionOrder, 'Acak urutan soal'),
     randomizeOptionOrder: requireBool(s.randomizeOptionOrder, 'Acak urutan pilihan'),
     timeLimitMinutes,

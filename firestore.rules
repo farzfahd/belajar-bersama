@@ -792,6 +792,58 @@ service cloud.firestore {
         && resource.data.createdBy == request.auth.uid;
     }
 
+    // ---------- reports soal ----------
+    // Report disimpan sebagai SUBCOLLEKSI di bawah soal, bukan koleksi terpisah
+    // di root space (berbeda dari `noteReports` yang top-level). Alasannya:
+    // pemilik soal harus bisa membaca SEMUA report atas soal miliknya dengan
+    // `onSnapshot` polos tanpa filter, dan rules dapat membuktikannya karena
+    // dokumen induk soal ada di PATH - jadi tidak perlu query `in` (batas 10
+    // id per query) maupun index tambahan. Pelapor membaca report miliknya
+    // sendiri lewat filter `reporterId`.
+    match /spaces/{spaceId}/questions/{questionId}/reports/{reportId} {
+      // Pemilik soal: membaca seluruh report. Pelapor: hanya reportnya sendiri.
+      allow get: if isMember(spaceId)
+        && (get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId))
+              .data.createdBy == request.auth.uid
+            || resource.data.reporterId == request.auth.uid);
+
+      // CATATAN PENTING (dibuktikan tes, bukan asumsi): cabang `resource.data`
+      // TIDAK bisa dijadikan salah satu disjunct di rule `list`. Untuk query,
+      // engine rules harus bisa membuktikan seluruh rule hanya dari PATH dan
+      // constraint query; begitu `resource.data` muncul (walau di dalam OR),
+      // query polos owner ikut ditolak. Maka `list` hanya untuk owner, dan
+      // pelapor membaca reportnya sendiri lewat `get` (bukan list).
+      allow list: if isMember(spaceId)
+        && get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId))
+             .data.createdBy == request.auth.uid;
+
+      // Melapor soal milik partner saja (melapor soal sendiri tidak berguna).
+      // Soal yang dilaporkan harus benar-benar terlihat oleh pelapor, jadi
+      // report tidak bisa dibuat atas soal private partner.
+      allow create: if isMember(spaceId)
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.questionId == questionId
+        && get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId)).data.createdBy != request.auth.uid
+        && questionVisibleTo(
+             get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId)).data,
+             request.auth.uid)
+        && request.resource.data.type in ['wrong_answer', 'typo', 'ambiguous', 'duplicate', 'other']
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 2000
+        // `size() > 0` saja tidak menolak pesan berisi spasi saja. Rules tidak
+        // punya trim, jadi dipakai pola: minimal satu karakter yang bukan
+        // whitespace (RE2). Client juga memangkas, tapi rules tidak boleh
+        // bergantung pada itu.
+        && request.resource.data.message.matches('.*[^ \\t\\n\\r].*')
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.schemaVersion == 1;
+
+      // Report bersifat abadi: tidak diedit/dihapus. Pemilik cukup membacanya
+      // lalu memperbaiki soalnya, atau membiarkan reportnya sebagai riwayat.
+      allow update, delete: if false;
+    }
+
     // ---------- quizzes (kumpulan soal yang dikonfigurasi) ----------
     // Satu dokumen = satu kuis. `questionIds` adalah SNAPSHOT id soal yang
     // dipakai, BUKAN urutan live dari Question Bank: quiz tidak bergantung
@@ -810,11 +862,16 @@ service cloud.firestore {
     function validQuizSettings(s) {
       return s is map
         && s.keys().hasOnly([
-             'questionCount', 'randomizeQuestionOrder', 'randomizeOptionOrder',
+             'randomizeQuestionOrder', 'randomizeOptionOrder',
              'timeLimitMinutes', 'passingScorePercent', 'maxAttempts',
              'showAnswerMode', 'showExplanation', 'allowRetry'
            ])
-        && (!('questionCount' in s) || (s.questionCount is int && s.questionCount >= 1 && s.questionCount <= 50))
+        // CATATAN CP2: `questionCount` dihapus dari daftar. Jumlah soal kuis
+        // = panjang `questionIds`, jadi tidak ada lagi field jumlah soal
+        // terpisah yang bisa menyimpang dari snapshot. Dokumen kuis lama yang
+        // masih menyimpan `questionCount` akan ditolak `hasOnly` bila ditulis
+        // ulang tanpa melalui service — `normalizeQuizSettings` membuang key
+        // itu sebelum menulis (lihat utils/quizSettings.js).
         && (!('randomizeQuestionOrder' in s) || s.randomizeQuestionOrder is bool)
         && (!('randomizeOptionOrder' in s) || s.randomizeOptionOrder is bool)
         && (!('timeLimitMinutes' in s) || (s.timeLimitMinutes is int && s.timeLimitMinutes >= 0 && s.timeLimitMinutes <= 480))
@@ -829,12 +886,18 @@ service cloud.firestore {
       return d.title is string && d.title.size() > 0 && d.title.size() <= 200
         && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
         // Topik wajib diisi dan harus benar-benar ada — pola sama dengan
-        // questions & quizAttempts (berbeda dari tasks yang boleh kosong/umum).
+        // questions (berbeda dari tasks yang boleh kosong/umum).
         && d.topicId is string && d.topicId.size() > 0
         && topicExistsOrEmpty(spaceId, d.topicId)
-        && d.questionIds is list && d.questionIds.size() >= 1 && d.questionIds.size() <= 50
+        // `questionIds` boleh KOSONG: kuis dibuat lebih dulu sebagai draft
+        // ("Buat Quiz" → langsung masuk editor), lalu soal ditambahkan dari
+        // Quiz Editor. Batas atas tetap 50. Elemen indeks 0 hanya boleh dicek
+        // bila list tidak kosong — kalau tidak, `d.questionIds[0]` tidak ada
+        // dan rules akan evaluation error.
+        && d.questionIds is list && d.questionIds.size() >= 0 && d.questionIds.size() <= 50
         && d.questionIds.toSet().size() == d.questionIds.size()
-        && d.questionIds[0] is string && d.questionIds[0].size() > 0 && d.questionIds[0].size() <= 100
+        && (d.questionIds.size() == 0
+            || (d.questionIds[0] is string && d.questionIds[0].size() > 0 && d.questionIds[0].size() <= 100))
         && d.settings is map && validQuizSettings(d.settings)
         && d.createdBy is string && d.createdBy.size() > 0
         && 'createdAt' in d && d.createdAt is timestamp
@@ -890,7 +953,167 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // ---------- topicProgress (status + skor per topik per user) ----------
+    // ---------- attempts (CP2: satu percobaan pengerjaan kuis) ----------
+    // Path: spaces/{spaceId}/quizzes/{quizId}/attempts/{attemptId}
+    //
+    // BERBEDA dari koleksi legacy `quizAttempts` (blok di atas): attempts
+    // nested di bawah kuis, memuat jawaban + nilai manual (butuh update
+    // bertahap), dan bersifat PRIVAT. Legacy `quizAttempts` dibiarkan utuh.
+    // CATATAN NAMA: fungsi ini sengaja bernama `validQuizAttempt`, bukan
+    // `validAttempt` — nama itu sudah dipakai blok legacy `quizAttempts`, dan
+    // Firestore Rules menolak dua fungsi bernama sama dalam satu ruleset.
+    // Entri `questionSnapshot` = SALINAN LENGKAP satu soal pada saat attempt
+    // dimulai (bukan ID). Daftar field per tipe DITURUNKAN dari pemakaian
+    // nyata di `QuestionAttemptForm.jsx` (render/review) dan `grading.js`
+    // (auto grading) — lihat `SNAPSHOT_TYPE_FIELDS` di attemptEngine.js.
+    //
+    // `validQuestionTypeSpecific` DIPAKAI ULANG apa adanya: nama field kunci
+    // di snapshot sama persis dengan di dokumen soal, jadi attempt tidak
+    // bisa menyimpan kunci jawaban dengan bentuk yang tidak bisa dinilai.
+    //
+    // CATATAN BATAS RULES (sama seperti `optionListOk`/`validCaseStudy`):
+    // hanya `questionSnapshot[0]` yang bisa diperiksa secara mendalam
+    // karena rules tidak punya loop. Aturan ini tetap menangkap snapshot yang
+    // salah BENTUK atau berisi kunci yang ngawur pada entri pertama; integritas
+    // entri berikutnya dijaga `validQuizAttempt` lewat jumlah array dan
+    // `attemptStructuralImmutable` (snapshot tidak bisa diubah setelah create).
+    function validSnapshotEntry(e) {
+      return e is map
+        && e.id is string && e.id.size() > 0 && e.id.size() <= 128
+        && e.type in [
+             'single', 'multiple', 'boolean', 'short_answer', 'essay',
+             'matching', 'ordering', 'numerical', 'code', 'case_study',
+             'unavailable'
+           ]
+        && e.prompt is string && e.prompt.size() <= 5000
+        && (!('explanation' in e) || (e.explanation is string && e.explanation.size() <= 2000))
+        // Soal yang utuh: `points` wajib 1..100 (satu-satunya sumber maxScore
+        // attempt) dan boleh membawa field kunci jawaban sesuai tipenya.
+        //
+        // Soal yang TIDAK ada saat attempt dimulai (`unavailable`): `points` 0
+        // dan TIDAK boleh punya field kunci apa pun. Kalau entri seperti ini
+        // boleh membawa kunci, owner bisa menyelundupkan kunci jawaban ke
+        // attempt lewat jalur yang tidak bisa dinilai.
+        //
+        // `available: false` HANYA sah untuk entri `unavailable`; entri soal
+        // asli tidak boleh menyamar jadi tidak tersedia.
+        && (e.type == 'unavailable'
+            ? (e.points == 0
+               && ('available' in e) && e.available == false
+               && !('explanation' in e)
+               && !('answerIndex' in e) && !('correctIndices' in e)
+               && !('correctBoolean' in e) && !('correctValue' in e)
+               && !('tolerance' in e) && !('acceptedAnswers' in e)
+               && !('sampleAnswer' in e) && !('options' in e)
+               && !('pairs' in e) && !('items' in e)
+               && !('starterCode' in e) && !('expectedOutput' in e)
+               && !('sampleSolution' in e) && !('caseText' in e)
+               && !('subQuestions' in e))
+            : (e.points is int && e.points >= 1 && e.points <= 100
+               && (!('available' in e) || e.available == true)
+               && validQuestionTypeSpecific(e)));
+    }
+
+    // Versi 2: snapshot memuat isi soal. Versi 1 (array ID) sudah tidak dipakai
+    // — tidak pernah ada attempt versi 1 di emulator saat skema ini diubah.
+    function validQuizAttempt(spaceId, quizId, d) {
+      // Kuis induk harus benar-benar ada. Ini sekaligus memberi makna pada
+      // parameter `spaceId` (rules menolak parameter yang tak terpakai) dan
+      // mencegah attempt dibuat pada quiz yang tidak ada.
+      return exists(/databases/$(database)/documents/spaces/$(spaceId)/quizzes/$(quizId))
+        && d.uid is string && d.uid.size() > 0
+        && d.quizId is string && d.quizId == quizId
+        && d.startedAt is timestamp
+        && d.questionSnapshot is list && d.questionSnapshot.size() >= 1 && d.questionSnapshot.size() <= 50
+        && validSnapshotEntry(d.questionSnapshot[0])
+        && d.answers is list && d.answers.size() == d.questionSnapshot.size()
+        && (!('completedAt' in d) || d.completedAt == null || d.completedAt is timestamp)
+        && (!('durationSeconds' in d) || d.durationSeconds == null
+            || (d.durationSeconds is int && d.durationSeconds >= 0 && d.durationSeconds <= 604800))
+        && (!('score' in d) || ((d.score is int || d.score is float) && d.score >= 0))
+        && (!('maxScore' in d) || ((d.maxScore is int || d.maxScore is float) && d.maxScore >= 0))
+        && (!('scorePercent' in d) || ((d.scorePercent is int || d.scorePercent is float)
+            && d.scorePercent >= 0 && d.scorePercent <= 100))
+        && (!('passed' in d) || d.passed is bool)
+        && (!('status' in d) || d.status in ['in_progress', 'completed', 'pending_manual_grade', 'graded'])
+        && d.schemaVersion == 2;
+    }
+
+    // Field struktural attempt: melekat sejak create dan tidak boleh berubah.
+    // `answers` SENGAJA tidak ada di sini — isinya memang berubah (jawaban
+    // diisi lalu dinilai). Yang dikunci owner adalah `answers` setelah attempt
+    // ditutup (lihat `attemptOwnerUpdate`).
+    function attemptStructuralImmutable() {
+      return immutable(['uid', 'quizId', 'startedAt', 'questionSnapshot', 'schemaVersion']);
+    }
+
+    // Owner's `answers` boleh berubah hanya selama attempt masih berjalan.
+    // Setelah ditutup, jawaban terkunci supaya attempt historis tidak bisa
+    // diubah diam-diam.
+    function attemptOwnerUpdate() {
+      return attemptStructuralImmutable()
+        && (resource.data.status == 'in_progress' || !changed().hasAny(['answers']));
+    }
+
+    // Partner (anggota space lain) hanya boleh menulis nilai manual pada
+    // attempt yang SUDAH selesai. Daftar field terlarang ditulis terbalik:
+    // partner WAJIB `hasOnly` satu field `answers` — karena `manualScore`/
+    // `manualFeedback`/`gradedBy`/`gradedAt` berada DI DALAM array `answers`,
+    // dan Firestore tidak mendukung update field di dalam array (harus tulis
+    // ulang array). `answerEntryStable` menjaga agar penulisan ulang itu tidak
+    // diam-diam mengubah `userAnswer`/nilai otomatis pada entri indeks 0.
+    //
+    // CATATAN BATAS RULES: perbandingan entri jawaban hanya bisa dilakukan
+    // pada indeks 0 (tidak ada loop). Jumlah array wajib sama persis; entri
+    // lain tidak dapat dibandingkan rules — limitation terdokumentasi di
+    // docs/PROGRESS.md.
+    function attemptManualOnly() {
+      return changed().hasOnly(['answers'])
+        && request.resource.data.answers.size() == resource.data.answers.size()
+        && answerEntryStable(request.resource.data.answers[0], resource.data.answers[0]);
+    }
+
+    // Bagian entri jawaban yang WAJIB tetap sama saat partner menulis ulang
+    // `answers` untuk mengisi nilai manual.
+    function answerEntryStable(after, before) {
+      return after is map
+        && before is map
+        && after.questionId == before.questionId
+        && after.userAnswer == before.userAnswer
+        && after.pointsEarned == before.pointsEarned
+        && after.isCorrect == before.isCorrect
+        && after.needsManualGrade == before.needsManualGrade;
+    }
+
+    match /spaces/{spaceId}/quizzes/{quizId}/attempts/{attemptId} {
+      // PRIVAT: hanya pemilik attempt. Berbeda dari `quizzes` induk yang
+      // shared — partner tidak boleh membaca attempt orang lain.
+      allow get, list: if isMember(spaceId) && resource.data.uid == request.auth.uid;
+
+      allow create: if isMember(spaceId)
+        && validQuizAttempt(spaceId, quizId, request.resource.data)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'in_progress';
+
+      // Pemilik: menutup attempt & menyimpan jawaban selama belum ditutup.
+      allow update: if isMember(spaceId)
+        && resource.data.uid == request.auth.uid
+        && attemptOwnerUpdate()
+        && validQuizAttempt(spaceId, quizId, request.resource.data);
+
+      // Partner: nilai manual HANYA pada attempt yang sudah selesai (bukan
+      // `in_progress`), dan HANYA pada field manual.
+      allow update: if isMember(spaceId)
+        && resource.data.uid != request.auth.uid
+        && resource.data.status != 'in_progress'
+        && attemptManualOnly()
+        && validQuizAttempt(spaceId, quizId, request.resource.data);
+
+      // Attempt adalah catatan historis: tidak boleh dihapus.
+      allow delete: if false;
+    }
+
+    // topicProgress (status + skor per topik per user) ----------
     // Id dokumen = `<topicId>_<uid>`, sama seperti noteStates.
     function validTopicProgress(d) {
       return d.topicId is string && d.topicId.size() > 0

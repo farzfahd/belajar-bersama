@@ -1,5 +1,7 @@
 import { useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
+import { IconLearn, IconLink, IconNotes } from '../../../shared/icons';
 import NotesPanel from '../../notes/components/NotesPanel';
 import ResourcesPanel from '../../resources/components/ResourcesPanel';
 
@@ -7,12 +9,12 @@ const TABS = [
   {
     key: 'notes',
     label: 'Notes',
-    icon: '📝'
+    icon: IconNotes
   },
   {
     key: 'resources',
     label: 'Resources',
-    icon: '🔗'
+    icon: IconLink
   }
 ];
 
@@ -36,14 +38,12 @@ export default function LearnPage() {
 
   return (
     <div className="space-y-6">
-      <header className="card flex flex-col gap-1">
-        <div className="eyebrow">belajar bersama · materi</div>
-        <h1 className="font-head text-2xl text-ink">📚 Learn</h1>
-        <p className="text-[13.5px] leading-relaxed text-dim">
-          Semua materi menempel pada sebuah topik di Roadmap. Kedua anggota bisa berbagi
-          catatan (Markdown) dan sumber belajar di ruang ini.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="belajar bersama · materi"
+        icon={<IconLearn size={26} />}
+        title="Learn"
+        description="Semua materi menempel pada sebuah topik di Roadmap. Kedua anggota bisa berbagi catatan (Markdown) dan sumber belajar di ruang ini."
+      />
 
       <div role="tablist" aria-label="Jenis materi" className="flex border-b border-line">
         {TABS.map((t, index) => (
@@ -63,7 +63,7 @@ export default function LearnPage() {
                 : 'border-b-transparent text-dim hover:text-ink'
             }`}
           >
-            {t.icon} {t.label}
+            <span className="inline-flex items-center gap-1.5"><t.icon size={15} /> {t.label}</span>
           </button>
         ))}
       </div>

@@ -1,19 +1,34 @@
+import { IconArrowDown, IconArrowRight, IconArrowUp, IconCheck, IconClose, IconFlag, IconKey, IconNotes, IconPlay } from '../../../shared/icons';
 import { useState } from 'react';
 import Modal from '../../../shared/ui/Modal';
 import Button from '../../../shared/ui/Button';
 import Badge from '../../../shared/ui/Badge';
-import { QUESTION_TYPE_LABELS } from '../../../lib/constants';
+import EmptyState from '../../../shared/ui/EmptyState';
+import { QUESTION_REPORT_TYPE_LABELS, QUESTION_TYPE_LABELS } from '../../../lib/constants';
 import { gradeQuestionAnswer } from '../utils/grading';
+import { useQuestionReports } from '../hooks/useQuestionReports';
+import { timeAgo } from '../../../shared/utils/time';
 
 export default function QuestionDetailModal({
   open,
+  spaceId,
   question,
   isOwner,
+  onReport,
   onClose
 }) {
-  const [tab, setTab] = useState('preview'); // 'preview' | 'key'
+  const [tab, setTab] = useState('preview'); // 'preview' | 'key' | 'reports'
   const [userAnswer, setUserAnswer] = useState(null);
   const [gradingResult, setGradingResult] = useState(null);
+
+  // Hanya pemilik soal yang boleh LIST report (lihat catatan di
+  // `firestore.rules`), jadi listener hanya dipasang untuk owner. Pelapor
+  // mendapat konfirmasi lewat toast, bukan daftar report.
+  const { data: reports = [], loading: reportsLoading, error: reportsError } = useQuestionReports(
+    spaceId,
+    question?.id || null,
+    { enabled: open && tab === 'reports' && isOwner && Boolean(question?.id) }
+  );
 
   if (!question) return null;
 
@@ -49,7 +64,7 @@ export default function QuestionDetailModal({
             }`}
             onClick={() => setTab('preview')}
           >
-            🎮 Simulasi Pengerja
+            <span className="inline-flex items-center gap-1.5"><IconPlay size={15} /> Simulasi Pengerja</span>
           </button>
           <button
             type="button"
@@ -60,7 +75,20 @@ export default function QuestionDetailModal({
             }`}
             onClick={() => setTab('key')}
           >
-            🔑 Kunci Jawaban & Pembahasan
+            <span className="inline-flex items-center gap-1.5"><IconKey size={15} /> Kunci Jawaban & Pembahasan</span>
+          </button>
+          <button
+            type="button"
+            className={`pb-2 transition-colors ${
+              tab === 'reports'
+                ? 'border-b-2 border-accent text-accent font-semibold'
+                : 'text-dim hover:text-ink'
+            }`}
+            onClick={() => setTab('reports')}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <IconFlag size={15} /> Laporan {isOwner && reports.length > 0 ? `(${reports.length})` : ''}
+            </span>
           </button>
         </div>
 
@@ -69,7 +97,7 @@ export default function QuestionDetailModal({
           <div className="font-mono text-[10.5px] uppercase tracking-wider text-dimmer">
             Pertanyaan
           </div>
-          <div className="font-sans text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap">
+          <div className="font-body text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap">
             {question.prompt}
           </div>
         </div>
@@ -208,7 +236,7 @@ export default function QuestionDetailModal({
                     <span className="w-1/2 p-2 rounded-smc border border-line bg-bg2 text-[13px] text-ink">
                       {p.left}
                     </span>
-                    <span className="text-dim">➔</span>
+                    <IconArrowRight size={15} className="shrink-0 text-dim" />
                     <select
                       className="w-1/2 p-2 rounded-smc border border-line bg-bg2 text-[13px] text-ink"
                       value={userAnswer?.[p.left] || ''}
@@ -251,7 +279,7 @@ export default function QuestionDetailModal({
                           setUserAnswer(next);
                         }}
                       >
-                        ↑
+                        <IconArrowUp size={14} />
                       </Button>
                       <Button
                         size="sm"
@@ -263,7 +291,7 @@ export default function QuestionDetailModal({
                           setUserAnswer(next);
                         }}
                       >
-                        ↓
+                        <IconArrowDown size={14} />
                       </Button>
                     </div>
                   </div>
@@ -298,7 +326,7 @@ export default function QuestionDetailModal({
             {/* Actions for simulation */}
             <div className="flex items-center gap-2 pt-2">
               <Button size="sm" onClick={handleGrade}>
-                🧪 Periksa Jawaban
+                <IconCheck size={15} /> Periksa Jawaban
               </Button>
               <Button size="sm" variant="ghost" onClick={resetSimulation}>
                 Reset
@@ -312,17 +340,17 @@ export default function QuestionDetailModal({
                   gradingResult.isManual
                     ? 'border-line bg-bg2'
                     : gradingResult.isCorrect
-                    ? 'border-ok/40 bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]'
-                    : 'border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]'
+                    ? 'border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]'
+                    : 'border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-[13.5px]">
                     {gradingResult.isManual
-                      ? '📝 Memerlukan Pemeriksaan Manual'
+                      ? <span className="inline-flex items-center gap-1.5"><IconNotes size={15} /> Memerlukan Pemeriksaan Manual</span>
                       : gradingResult.isCorrect
-                      ? '✅ Jawaban Benar!'
-                      : '❌ Jawaban Kurang Tepat'}
+                      ? <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={15} /> Jawaban Benar!</span>
+                      : <span className="inline-flex items-center gap-1.5 text-accent"><IconClose size={15} /> Jawaban Kurang Tepat</span>}
                   </span>
                   <span className="font-mono text-[12px]">
                     +{gradingResult.pointsEarned} / {question.points || 10} Poin
@@ -394,7 +422,7 @@ export default function QuestionDetailModal({
                   <div className="text-[12px] text-dimmer">Pasangan Benar:</div>
                   {(question.pairs || []).map((p, idx) => (
                     <div key={idx} className="text-[13px] text-ink">
-                      • <b>{p.left}</b> ➔ {p.right}
+                      <b>{p.left}</b> <IconArrowRight size={13} className="inline align-[-2px] text-dimmer" /> {p.right}
                     </div>
                   ))}
                 </div>
@@ -442,6 +470,66 @@ export default function QuestionDetailModal({
                 {question.explanation || 'Belum ada penjelasan tambahan untuk soal ini.'}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Tab 3: Laporan Soal */}
+        {tab === 'reports' && (
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-[12.5px] leading-relaxed text-dim">
+                {isOwner
+                  ? 'Laporan dari partner tentang soal ini. Perbaiki soalnya bila memang ada yang keliru - laporan tidak dihapus, jadi riwayatnya tetap tersimpan.'
+                  : 'Keluhan soal ini dikirim ke pemilik soal. Laporan tidak bisa diedit atau dihapus, jadi rupiahkan dengan spesifik.'}
+              </p>
+              {!isOwner && !question.deletedAt && (
+                <Button size="sm" variant="ghost" onClick={() => onReport?.(question)}>
+                  <IconFlag size={15} /> Lapor Soal
+                </Button>
+              )}
+            </div>
+
+            {!isOwner && (
+              <p className="rounded-smc border border-line bg-bg2 px-3 py-2.5 text-[12.5px] text-dimmer">
+                Riwayat laporan milikmu tidak ditampilkan di sini - yang perlu
+                acted upon adalah pemilik soal.
+              </p>
+            )}
+
+            {isOwner && reportsError && (
+              <div className="rounded-smc border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
+                Gagal memuat laporan: {reportsError}
+              </div>
+            )}
+
+            {isOwner && !reportsError && reportsLoading && (
+              <div className="py-6 text-center text-[12.5px] text-dimmer">Memuat laporan...</div>
+            )}
+
+            {isOwner && !reportsError && !reportsLoading && reports.length === 0 && (
+              <EmptyState
+                title="Belum Ada Laporan"
+                description="Belum ada partner yang melaporkan soal ini."
+              />
+            )}
+
+            {isOwner && reports.length > 0 && (
+              <ul className="space-y-2">
+                {reports.map((r) => (
+                  <li key={r.id} className="rounded-smc border border-line bg-bg2 px-3 py-2.5 space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Badge tone="accent">
+                        {QUESTION_REPORT_TYPE_LABELS[r.type] || r.type}
+                      </Badge>
+                      <span className="font-mono text-[10.5px] text-dimmer">
+                        {timeAgo(r.createdAt)}
+                      </span>
+                    </div>
+                    <p className="text-[13.5px] leading-relaxed text-ink whitespace-pre-wrap">{r.message}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>

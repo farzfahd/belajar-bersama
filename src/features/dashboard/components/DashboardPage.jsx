@@ -1,3 +1,4 @@
+import { IconEmptyNote, IconGreeting } from '../../../shared/icons';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import Avatar from '../../../shared/components/Avatar';
@@ -19,29 +20,7 @@ import { topicPath } from '../../topics/utils/tree';
 import { timeAgo } from '../../../shared/utils/time';
 import { statusLabel, statusTone } from '../../../shared/utils/status';
 import DashboardProgressPreview from './DashboardProgressPreview';
-import { IconGreeting } from '../../../shared/icons';
 import './../dashboard.css';
-
-// TODO Phase 2: ganti dengan IconEmptyNote / IconEmptyResource final.
-// Placeholder geometris sementara (Opsi A di spesifikasi Phase 1):
-// satu bentuk dasar yang sama untuk semua empty state Dashboard.
-function EmptyMark() {
-  return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.25"
-      strokeLinecap="round"
-      className="db-empty-mark"
-      aria-hidden="true"
-    >
-      <rect x="4.5" y="4.5" width="15" height="15" rx="2" strokeDasharray="3 3" />
-    </svg>
-  );
-}
 
 function greeting() {
   const h = new Date().getHours();
@@ -49,6 +28,14 @@ function greeting() {
   if (h < 15) return 'Selamat siang';
   if (h < 19) return 'Selamat sore';
   return 'Selamat malam';
+}
+
+// `topicPath` mengembalikan array objek topik, bukan teks. Kalau langsung
+// dipakai di template literal hasilnya "[object Object]", jadi judulnya
+// dirangkai manual (pola sama dengan buildSearchRecords.js).
+function topicPathLabel(topicId, topics) {
+  const path = topicPath(topicId, topics);
+  return path.length ? path.map((topic) => topic.title).join(' · ') : 'Tanpa topik';
 }
 
 function NumberStat({ value, label }) {
@@ -191,8 +178,10 @@ export default function DashboardPage() {
           <div
             className="db-progress-fill"
             style={{
+              // `--db-accent` tidak pernah didefinisikan (token aslinya adalah
+              // `--accent`), jadi baris ini selalu jatuh ke transparan.
               width: `${fillPct}%`,
-              backgroundColor: roles?.filled ? 'var(--ok)' : 'var(--db-accent)'
+              backgroundColor: roles?.filled ? 'var(--ok)' : 'var(--accent)'
             }}
           />
         </div>
@@ -214,145 +203,140 @@ export default function DashboardPage() {
       </section>
 
       <div className="db-sections">
-      {/* Personal */}
-      <section className="db-section">
-        <h2 className="db-section-title mb-3">Personal</h2>
-        <div className="grid gap-4 min-[860px]:grid-cols-2">
+        {/* Personal */}
+        <section className="db-section">
+          <h2 className="db-section-title mb-3">Personal</h2>
+          <div className="db-card-grid">
+            <div className="db-card">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="db-label">Catatan terbaru milikmu</div>
+                {myNotes.length > 0 && (
+                  <Link to="/notes/new" className="db-action">
+                    + Catatan baru
+                  </Link>
+                )}
+              </div>
+              {myNotes.length === 0 ? (
+                <EmptyState
+                  icon={<IconEmptyNote size={32} />}
+                  title="Belum ada catatan"
+                  description="Catatan Markdown yang kamu tulis akan muncul di sini."
+                  action={
+                    <Link to="/notes/new" className="db-action">
+                      + Buat catatan
+                    </Link>
+                  }
+                />
+              ) : (
+                <ul>
+                  {myNotes.slice(0, 4).map((note) => (
+                    <RowLink
+                      key={note.id}
+                      to={`/notes/${note.id}`}
+                      title={note.title}
+                      meta={`${topicPathLabel(note.topicId, topics)} · ${timeAgo(note.updatedAt)}`}
+                      badge={
+                        <Badge tone={statusTone(note.status)}>{statusLabel(note.status)}</Badge>
+                      }
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="db-card">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="db-label">Resource yang sedang kamu baca</div>
+                {myReading.length > 0 && (
+                  <Link to="/learn" className="db-action">
+                    Cari resource
+                  </Link>
+                )}
+              </div>
+              {myReading.length === 0 ? (
+                <EmptyState
+                  icon={<IconEmptyNote size={32} />}
+                  title="Tidak ada bacaan aktif"
+                  description="Resource yang kamu tandai “Sedang dibaca” akan tampil di sini."
+                  action={
+                    <Link to="/learn" className="db-action">
+                      Buka Learn
+                    </Link>
+                  }
+                />
+              ) : (
+                <ul>
+                  {myReading.slice(0, 4).map(({ resource, state }) => (
+                    <RowLink
+                      key={resource.id}
+                      to={resource.url}
+                      title={resource.title || resource.url}
+                      meta={`${topicPathLabel(resource.topicId, topics)} · ${timeAgo(state.updatedAt)}`}
+                      badge={<Badge tone="warn">dibaca</Badge>}
+                    />
+                  ))}
+                </ul>
+              )}
+              <p className="db-label--meta mt-3">
+                {myBookmarks} catatan ditandai buku · {myNotes.length} catatan milikmu
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Partner */}
+        <section className="db-section">
+          <h2 className="db-section-title mb-3">Partner</h2>
           <div className="db-card">
             <div className="mb-2 flex items-start justify-between gap-3">
-              <div className="db-label">Catatan terbaru milikmu</div>
-              {myNotes.length > 0 && (
-                <Link to="/notes/new" className="db-action">
-                  + Catatan baru
+              <div className="db-label">Catatan yang dibagikan partner</div>
+              {partnerNotes.length > 0 && (
+                <Link to="/learn" className="db-action">
+                  Lihat semua
                 </Link>
               )}
             </div>
-            {myNotes.length === 0 ? (
+            {partnerNotes.length === 0 ? (
               <EmptyState
-                icon={<EmptyMark />}
-                title="Belum ada catatan"
-                description="Catatan Markdown yang kamu tulis akan muncul di sini."
-                action={
-                  <Link to="/notes/new" className="db-action">
-                    + Buat catatan
-                  </Link>
-                }
+                icon={<IconEmptyNote size={32} />}
+                title="Belum ada catatan shared dari partner"
+                description="Catatan yang partner bagikan ke ruang ini akan tampil di sini."
               />
             ) : (
               <ul>
-                {myNotes.slice(0, 4).map((note) => (
+                {partnerNotes.slice(0, 5).map((note) => (
                   <RowLink
                     key={note.id}
                     to={`/notes/${note.id}`}
                     title={note.title}
-                    meta={`${topicPath(note.topicId, topics) || 'Tanpa topik'} · ${timeAgo(note.updatedAt)}`}
-                    badge={
-                      <Badge tone={statusTone(note.status)}>{statusLabel(note.status)}</Badge>
-                    }
+                    meta={`${partner.data?.displayName || 'Partner'} · ${topicPathLabel(note.topicId, topics)} · ${timeAgo(note.updatedAt)}`}
+                    badge={<Badge tone="accent">shared</Badge>}
                   />
                 ))}
               </ul>
             )}
           </div>
+        </section>
 
+        {/* Together */}
+        <section className="db-section">
+          <h2 className="db-section-title mb-3">Together</h2>
           <div className="db-card">
-            <div className="mb-2 flex items-start justify-between gap-3">
-              <div className="db-label">Resource yang sedang kamu baca</div>
-              {myReading.length > 0 && (
-                <Link to="/learn" className="db-action">
-                  Cari resource
-                </Link>
-              )}
-            </div>
-            {myReading.length === 0 ? (
-              <EmptyState
-                icon={<EmptyMark />}
-                title="Tidak ada bacaan aktif"
-                description="Resource yang kamu tandai “Sedang dibaca” akan tampil di sini."
-                action={
-                  <Link to="/learn" className="db-action">
-                    Buka Learn
-                  </Link>
-                }
+            <div className="flex flex-wrap gap-8">
+              <NumberStat
+                value={`${together.doneTopics}/${together.topics}`}
+                label="topik selesai"
               />
-            ) : (
-              <ul>
-                {myReading.slice(0, 4).map(({ resource, state }) => (
-                  <RowLink
-                    key={resource.id}
-                    to={resource.url}
-                    title={resource.title || resource.url}
-                    meta={`${topicPath(resource.topicId, topics) || 'Tanpa topik'} · ${timeAgo(state.updatedAt)}`}
-                    badge={<Badge tone="warn">dibaca</Badge>}
-                  />
-                ))}
-              </ul>
-            )}
-            <p className="db-label--meta mt-3">
-              {myBookmarks} catatan ditandai buku · {myNotes.length} catatan milikmu
+              <NumberStat value={together.notes} label="total catatan" />
+              <NumberStat value={together.sharedNotes} label="catatan shared" />
+            </div>
+            <p className="mt-4 text-[13.5px] leading-[1.65] text-dim">
+              {together.notes === 0
+                ? 'Belum ada materi. Mulai dari Roadmap: buat topik pertama, lalu tulis catatan.'
+                : `Kalian sudah menulis ${together.notes} catatan di ruang ini, ${together.sharedNotes} di antaranya dibagikan ke dua orang.`}
             </p>
           </div>
-        </div>
-      </section>
-
-      <hr className="db-divider" />
-
-      {/* Partner */}
-      <section className="db-section">
-        <h2 className="db-section-title mb-3">Partner</h2>
-        <div className="db-card">
-          <div className="mb-2 flex items-start justify-between gap-3">
-            <div className="db-label">Catatan yang dibagikan partner</div>
-            {partnerNotes.length > 0 && (
-              <Link to="/learn" className="db-action">
-                Lihat semua
-              </Link>
-            )}
-          </div>
-          {partnerNotes.length === 0 ? (
-            <EmptyState
-              icon={<EmptyMark />}
-              title="Belum ada catatan shared dari partner"
-              description="Catatan yang partner bagikan ke ruang ini akan tampil di sini."
-            />
-          ) : (
-            <ul>
-              {partnerNotes.slice(0, 5).map((note) => (
-                <RowLink
-                  key={note.id}
-                  to={`/notes/${note.id}`}
-                  title={note.title}
-                  meta={`${partner.data?.displayName || 'Partner'} · ${topicPath(note.topicId, topics) || 'Tanpa topik'} · ${timeAgo(note.updatedAt)}`}
-                  badge={<Badge tone="accent">shared</Badge>}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <hr className="db-divider" />
-
-      {/* Together */}
-      <section className="db-section">
-        <h2 className="db-section-title mb-3">Together</h2>
-        <div className="db-card">
-          <div className="flex flex-wrap gap-x-10 gap-y-5">
-            <NumberStat
-              value={`${together.doneTopics}/${together.topics}`}
-              label="topik selesai"
-            />
-            <NumberStat value={together.notes} label="total catatan" />
-            <NumberStat value={together.sharedNotes} label="catatan shared" />
-          </div>
-          <p className="mt-4 text-[13.5px] leading-[1.65] text-dim">
-            {together.notes === 0
-              ? 'Belum ada materi. Mulai dari Roadmap: buat topik pertama, lalu tulis catatan.'
-              : `Kalian sudah menulis ${together.notes} catatan di ruang ini, ${together.sharedNotes} di antaranya dibagikan ke dua orang.`}
-          </p>
-        </div>
-      </section>
-
+        </section>
       </div>
 
       {/* Heatmap dipisah ke lebar penuh: min-width 420px tidak muat di kolom 1/3. */}

@@ -21,7 +21,9 @@ import ProgressPage from '../features/progress/components/ProgressPage';
 import AchievementsPage from '../features/progress/components/AchievementsPage';
 import QuestionBankPage from '../features/questions/components/QuestionBankPage';
 import QuizListPage from '../features/quizzes/components/QuizListPage';
-import QuizEditorPage from '../features/quizzes/components/QuizEditorPage';
+import QuizRoutePage from '../features/quizzes/components/QuizRoutePage';
+import QuizAttemptPage from '../features/quizzes/components/QuizAttemptPage';
+import QuizAttemptResultPage from '../features/quizzes/components/QuizAttemptResultPage';
 import { NAV } from './layout/navConfig';
 import SplashScreen from '../shared/components/SplashScreen';
 import { toErrorMessage } from '../shared/utils/errors';
@@ -59,7 +61,7 @@ function Gate() {
 // dari rules: pada dokumen yang hilang, isMemberOf gagal (rules fail-closed)
 // sehingga deny tampil sebagai permission-denied, bukan "document missing".
 function SpaceGate() {
-  const { user } = useAuthState();
+  const { user, initializing } = useAuthState();
   const { data: profile, loading } = useProfile(user?.uid);
   const space = useSpace(profile?.spaceId);
   const spaceProblem =
@@ -67,7 +69,15 @@ function SpaceGate() {
     (space.errorCode === 'permission-denied' ||
       (!space.loading && !space.error && space.data === null));
 
-  if ((loading && !profile) || (profile?.spaceId && !space.data && space.loading)) {
+  // `initializing` WAJIB ikut di sini. `useAuthState` di dalam SpaceGate
+  // adalah instance baru: sesaat setelah Gate meloloskan user, instance ini
+  // masih initializing sehingga `user` null -> `useProfile(undefined)` ->
+  // `loading: false`, `data: null`. Tanpa baris ini, kondisi
+  // `!profile?.spaceId` langsung terpenuhi dan OnboardingScreen
+  // ("Mari bangun ruang belajar") tampil ke pengguna yang sudah punya ruang,
+  // lalu hilang ~200-400ms kemudian saat profil termuat. Terukur pada 12/12
+  // muat dingin; pada koneksi lambat jendelahnya jauh lebih lama.
+  if (initializing || (loading && !profile) || (profile?.spaceId && !space.data && space.loading)) {
     return <SplashScreen label="Memuat ruang…" />;
   }
   if (!profile?.spaceId || spaceProblem) return <OnboardingScreen />;
@@ -105,7 +115,14 @@ export default function AppRoutes() {
               <Route path="/roadmap/:topicId" element={<TopicDetailPage />} />
               <Route path="/questions" element={<QuestionBankPage />} />
               <Route path="/quiz" element={<QuizListPage />} />
-              <Route path="/quiz/:quizId" element={<QuizEditorPage />} />
+              {/* Satu route, dua tampilan: QuizRoutePage memilih editor (pemilik)
+                  atau detail peserta (member) dari `createdBy` kuis. */}
+              <Route path="/quiz/:quizId" element={<QuizRoutePage />} />
+              {/* CP2 attempt engine. Urutan penting: route hasil (yang lebih
+                  spesifik) diletakkan sebelum route '/quiz/:quizId' agar tidak
+                  tertangkap sebagai quizId. */}
+              <Route path="/quiz/:quizId/attempt/:attemptId/result" element={<QuizAttemptResultPage />} />
+              <Route path="/quiz/:quizId/attempt" element={<QuizAttemptPage />} />
               <Route path="/progress" element={<ProgressPage />} />
               <Route path="/achievements" element={<AchievementsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

@@ -1,9 +1,11 @@
+import { IconNotes, IconTrash } from '../../../shared/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
+import FilterPanel from '../../../shared/ui/FilterPanel';
 import Select from '../../../shared/ui/Select';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useProfile } from '../../auth/hooks/useProfile';
@@ -152,86 +154,146 @@ export default function NotesPanel() {
 
   const list = view === 'trash' ? trash : active;
 
+  // Badge jumlah filter aktif. `sortBy` SENGAJA tidak dihitung: urutan hanya
+  // mengubah urutan tampilan, bukan menyaring data — jadi tidak ikut dihitung
+  // sebagai "filter aktif".
+  const activeFilterCount = [filterTopic, filterStatus, filterTag, filterOwner, filterVisibility].filter(
+    (v) => v !== 'all'
+  ).length;
+  const resetFilters = () => {
+    setFilterTopic('all');
+    setFilterStatus('all');
+    setFilterTag('all');
+    setFilterOwner('all');
+    setFilterVisibility('all');
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={filterTopic}
-            onChange={(e) => setFilterTopic(e.target.value)}
-            aria-label="Filter topik"
-            className="w-[9.5rem]"
-          >
-            <option value="all">Semua topik</option>
-            {orderedTopics.map((t) => (
-              <option key={t.id} value={t.id}>
-                {'·  '.repeat(t.level)}
-                {t.title}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            aria-label="Filter status"
-            className="w-[8.5rem]"
-          >
-            <option value="all">Semua status</option>
-            {STATUS.note.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABEL[s]}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={filterTag}
-            onChange={(e) => setFilterTag(e.target.value)}
-            aria-label="Filter tag"
-            className="w-[8.5rem]"
-          >
-            <option value="all">Semua tag</option>
-            {availableTags.map((t) => (
-              <option key={t} value={t}>
-                #{t}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={filterOwner}
-            onChange={(e) => setFilterOwner(e.target.value)}
-            aria-label="Filter pemilik"
-            className="w-[8rem]"
-          >
-            <option value="all">Semua pemilik</option>
-            <option value="mine">Milik saya</option>
-            <option value="partner">Milik partner</option>
-          </Select>
-          <Select
-            value={filterVisibility}
-            onChange={(e) => setFilterVisibility(e.target.value)}
-            aria-label="Filter visibilitas"
-            className="w-[8.5rem]"
-          >
-            <option value="all">Semua visibilitas</option>
-            <option value="shared">Shared</option>
-            <option value="private">Private</option>
-          </Select>
-          <Select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            aria-label="Urutkan"
-            className="w-[8rem]"
-          >
-            <option value="updated">Terbaru</option>
-            <option value="title">Judul A-Z</option>
-          </Select>
-        </div>
+        {/* Filter moved into one icon button (FilterPanel): 6 dropdowns in a row
+            were too cramped in narrow screens (text got truncated). */}
+        <FilterPanel
+          activeCount={activeFilterCount}
+          onReset={resetFilters}
+          filters={[
+            {
+              key: 'topic',
+              label: 'Topik',
+              node: (
+                <Select
+                  value={filterTopic}
+                  onChange={(e) => setFilterTopic(e.target.value)}
+                  aria-label="Filter topik"
+                >
+                  <option value="all">Semua topik</option>
+                  {orderedTopics.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {'·  '.repeat(t.level)}
+                      {t.title}
+                    </option>
+                  ))}
+                </Select>
+              )
+            },
+            {
+              key: 'status',
+              label: 'Status',
+              node: (
+                <Select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  aria-label="Filter status"
+                >
+                  <option value="all">Semua status</option>
+                  {STATUS.note.map((s) => (
+                    <option key={s} value={s}>
+                      {STATUS_LABEL[s]}
+                    </option>
+                  ))}
+                </Select>
+              )
+            },
+            {
+              key: 'tag',
+              label: 'Tag',
+              node: (
+                <Select
+                  value={filterTag}
+                  onChange={(e) => setFilterTag(e.target.value)}
+                  aria-label="Filter tag"
+                >
+                  <option value="all">Semua tag</option>
+                  {availableTags.map((t) => (
+                    <option key={t} value={t}>
+                      #{t}
+                    </option>
+                  ))}
+                </Select>
+              )
+            },
+            {
+              key: 'owner',
+              label: 'Pemilik',
+              node: (
+                <Select
+                  value={filterOwner}
+                  onChange={(e) => setFilterOwner(e.target.value)}
+                  aria-label="Filter pemilik"
+                >
+                  <option value="all">Semua pemilik</option>
+                  <option value="mine">Milik saya</option>
+                  <option value="partner">Milik partner</option>
+                </Select>
+              )
+            },
+            {
+              key: 'visibility',
+              label: 'Visibilitas',
+              node: (
+                <Select
+                  value={filterVisibility}
+                  onChange={(e) => setFilterVisibility(e.target.value)}
+                  aria-label="Filter visibilitas"
+                >
+                  <option value="all">Semua visibilitas</option>
+                  <option value="shared">Shared</option>
+                  <option value="private">Private</option>
+                </Select>
+              )
+            },
+            {
+              key: 'sort',
+              label: 'Urutkan',
+              node: (
+                <Select value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Urutkan">
+                  <option value="updated">Terbaru</option>
+                  <option value="title">Judul A-Z</option>
+                </Select>
+              )
+            }
+          ]}
+        />
         <div className="ml-auto flex items-center gap-2">
+          {/* Toggle Sampah TETAP di toolbar, bukan di dalam panel filter: ini
+              pergantian mode tampilan, bukan penyaringan data — mencampurkannya
+              ke panel filter akan membingungkan. Di layar sempit teksnya
+              disembunyikan (angka + ikon saja) supaya toolbar tidak penuh;
+              nama lengkapnya tetap ada di aria-label. */}
           <Button
             variant="ghost"
             onClick={() => setView(view === 'trash' ? 'active' : 'trash')}
+            aria-label={view === 'trash' ? `Kembali ke catatan (sampah berisi ${trash.length})` : `Sampah (${trash.length} item)`}
+            aria-pressed={view === 'trash'}
+            title={view === 'trash' ? 'Kembali ke catatan' : `Sampah (${trash.length})`}
+            className="gap-1.5"
           >
-            🗑 Sampah ({trash.length})
+            <IconTrash size={15} />
+            {/* Angka disembunyikan di layar lebar (teks "Sampah (N)" sudah
+                cukup), muncul kembali saat sempit. `hidden` sebagai kondisi
+                awal PENTING — tanpa itu kedua-duanya tampil: "Sampah (0) 0". */}
+            <span className="hidden max-[520px]:inline">{trash.length}</span>
+            <span className="max-[520px]:hidden">Sampah ({trash.length})</span>
           </Button>
           <Button onClick={() => navigate('/notes/new')}>＋ Catatan</Button>
         </div>
@@ -244,15 +306,13 @@ export default function NotesPanel() {
       )}
 
       {loading && (
-        <div className="flex justify-center py-12">
-          <Spinner size={28} />
-        </div>
+        <PageLoading label="Memuat catatan…" />
       )}
       {error && <p className="text-[13.5px] text-accent">{error}</p>}
 
       {!loading && !error && list.length === 0 && (
         <EmptyState
-          icon={view === 'trash' ? '🗑' : '📝'}
+          icon={view === 'trash' ? <IconTrash size={28} /> : <IconNotes size={28} />}
           title={view === 'trash' ? 'Sampah kosong' : 'Belum ada catatan'}
           description={
             view === 'trash'

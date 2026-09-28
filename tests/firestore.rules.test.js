@@ -21,6 +21,11 @@ import {
 
 
 const PROJECT_ID = 'demo-learning-berdua';
+// Host/port emulator opsional lewat env (RULES_TEST_HOST/RULES_TEST_PORT).
+// Dipakai agar suite tetap bisa dijalankan di port lain ketika emulator
+// pengembangan sedang hidup di 8080. Default tetap 127.0.0.1:8080.
+const EMU_HOST = process.env.RULES_TEST_HOST || '127.0.0.1';
+const EMU_PORT = Number(process.env.RULES_TEST_PORT || 8080);
 // Memanggil ctx.firestore() berkali-kali pada context sama memicu
 // "Firestore has already been started..." di rules-unit-testing 3.0.4.
 // Satu instance per context, dipakai ulang.
@@ -49,7 +54,7 @@ function it(name, fn) {
       () => console.log(`[OK]   ${name}`),
       (err) => {
         failed += 1;
-        console.log(`[FAIL] ${name}\n       -> ${err.message?.split('\n')[0] || err}`);
+        console.log(`[FAIL] ${name}\n       -> ${String(err.message || err).split('\n').slice(0, 4).join('\n          ')}`);
       }
     );
 }
@@ -382,7 +387,7 @@ async function main() {
   const rules = readFileSync('firestore.rules', 'utf8');
   testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
-    firestore: { rules }
+    firestore: { rules, host: EMU_HOST, port: EMU_PORT }
   });
   // WAJIB: hapus data sisa run sebelumnya. testEnv.cleanup() di akhir hanya
   // membuang konteks/app, TIDAK menghapus dokumen, sehingga tanpa ini suite
@@ -1450,6 +1455,103 @@ async function main() {
       questionData({ createdBy: 'alice' })));
   });
 
+  // ---------- CP3/R: report soal (subkoleksi di bawah soal) ----------
+  // Report disimpan sebagai `questions/{questionId}/reports/{reportId}` supaya
+  // owner bisa listener POLOS (dokumen induk ada di path) tanpa query `in`.
+  const reportPath = (qid, rid) => `spaces/space1/questions/${qid}/reports/${rid}`;
+  const reportDoc = (over = {}) => ({
+    questionId: 'q_ok_shared',
+    reporterId: 'bob',
+    type: 'wrong_answer',
+    message: 'Kunci jawaban seharusnya opsi B.',
+    createdAt: serverTimestamp(),
+    schemaVersion: 1,
+    ...over
+  });
+
+  await it('CP3/R: pelapor bisa melapor soal shared partner, dengan skema tervalidasi', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_ok')), reportDoc()));
+
+    // Jenis di luar daftar resmi.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_bad_type')),
+      reportDoc({ type: 'ngelapor' })));
+    // Pesan kosong / terlalu panjang.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_empty')),
+      reportDoc({ message: '   ' })));
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_long')),
+      reportDoc({ message: 'a'.repeat(2001) })));
+    // Memalsukan pelapor.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_forge')),
+      reportDoc({ reporterId: 'alice' })));
+    // questionId harus sama dengan soal di path.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_mismatch')),
+      reportDoc({ questionId: 'q_lain' })));
+    // Skema salah.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_ver')),
+      reportDoc({ schemaVersion: 2 })));
+    // Bukan anggota ruang.
+    await assertFails(setDoc(doc(fsDb(carolCP3), reportPath('q_ok_shared', 'r_carol')), reportDoc({
+      reporterId: 'carol'
+    })));
+  });
+
+  await it('CP3/R: melapor soal sendiri atau soal private partner DITOLAK', async () => {
+    // Melapor soal sendiri tidak berguna (tidak ada yang membaca).
+    await assertFails(setDoc(doc(fsDb(alice), reportPath('q_ok_shared', 'r_self')),
+      reportDoc({ reporterId: 'alice' })));
+    // Soal private partner tidak terlihat -> tidak boleh dilaporkan.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_priv', 'r_priv')),
+      reportDoc({ questionId: 'q_ok_priv' })));
+  });
+
+  await it('CP3/R: jenis "other" tetap wajib punya keterangan (semua jenis wajib)', async () => {
+    // Soal khusus tes ini, supaya hitungan report di `q_ok_shared` (dipakai
+    // assertion lain) tetap satu.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_other'),
+      questionData({ visibility: 'shared' })));
+    // "Lainnya" yang dijelaskan -> sah, dan memakai id soal dari snapshot kuis.
+    await assertSucceeds(setDoc(doc(fsDb(bob), reportPath('q_ok_other', 'r_other_ok')),
+      reportDoc({ questionId: 'q_ok_other', type: 'other', message: 'Kunci dan opsinya sama-sama masuk akal.' })));
+    // "Lainnya" tanpa keterangan -> ditolak, sama seperti jenis lain.
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_other', 'r_other_blank')),
+      reportDoc({ questionId: 'q_ok_other', type: 'other', message: '' })));
+    await assertFails(setDoc(doc(fsDb(bob), reportPath('q_ok_other', 'r_other_ws')),
+      reportDoc({ questionId: 'q_ok_other', type: 'other', message: '\n\t ' })));
+  });
+
+  await it('CP3/R: report hanya dibaca pemilik soal & pelapor; non-member ditolak', async () => {
+    const reports = (ctx) => collection(fsDb(ctx), 'spaces/space1/questions/q_ok_shared/reports');
+
+    // Pemilik soal: listener polos berhasil dan melihat report partner.
+    const asOwner = await getDocs(reports(alice));
+    assert.equal(asOwner.docs.length, 1);
+    assert.equal(asOwner.docs[0].id, 'r_ok');
+
+    // Pelapor TIDAK boleh list - walau memfilter reporterId miliknya. Ini
+    // konsekuensi_rules engine: `resource.data` di rule `list` membuat query
+    // polos owner ikut tidak terbuktikan (lihat catatan di firestore.rules).
+    await assertFails(getDocs(reports(bob)));
+    await assertFails(getDocs(query(reports(bob), where('reporterId', '==', 'bob'))));
+
+    // Pelapor tetap boleh MEMBACA reportnya sendiri lewat `get`.
+    await assertSucceeds(getDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_ok'))));
+    // Non-member ditolak lewat list maupun get.
+    await assertFails(getDocs(query(reports(carolCP3), where('reporterId', '==', 'bob'))));
+    await assertFails(getDoc(doc(fsDb(carolCP3), reportPath('q_ok_shared', 'r_ok'))));
+  });
+
+  await it('CP3/R: report bersifat abadi - update & delete ditolak untuk semua pihak', async () => {
+    await assertFails(updateDoc(doc(fsDb(alice), reportPath('q_ok_shared', 'r_ok')),
+      { message: 'diubah owner' }));
+    await assertFails(updateDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_ok')),
+      { message: 'diubah pelapor' }));
+    await assertFails(deleteDoc(doc(fsDb(alice), reportPath('q_ok_shared', 'r_ok'))));
+    await assertFails(deleteDoc(doc(fsDb(bob), reportPath('q_ok_shared', 'r_ok'))));
+    // Masih utuh setelah semua percobaan.
+    const asOwner = await getDocs(collection(fsDb(alice), 'spaces/space1/questions/q_ok_shared/reports'));
+    assert.equal(asOwner.docs.length, 1);
+  });
+
   // ---------- CP1-A: validasi struktur bank soal per tipe ----------
   await it('CP1-A: single choice — batas 2/20 opsi & answerIndex dalam rentang', async () => {
     const opts20 = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
@@ -1558,6 +1660,43 @@ async function main() {
       })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_notmap'),
       questionData({ type: 'matching', pairs: ['satu', 'dua'] })));
+
+    // ---- `pairDraft` (draft editor) --------------------------------------
+    // Syarat burdenednya Opsi B: field tambahan ini HARUS diterima rules
+    // tanpa perubahan rules. Kalau rules menolak, autosave "Lepas pasangan"
+    // akan selalu permission-denied dan seluruh perbaikan tidak berguna.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Prancis', right: 'Paris' }],
+        // Baris 'Jepang' belum dipasangkan -> `assigned` berisi null
+        pairDraft: {
+          lefts: ['Indonesia', 'Jepang', 'Prancis'],
+          rights: ['Jakarta', 'Tokyo', 'Paris'],
+          assigned: [0, null, 2]
+        }
+      })));
+    // Draft dengan satu baris saja tetap sah (draft boleh di tengah susun).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft_min'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Prancis', right: 'Paris' }],
+        pairDraft: { lefts: ['Indonesia'], rights: ['Jakarta'], assigned: [0] }
+      })));
+    // Soal lama TANPA pairDraft tetap sah (backward compatible, no migration).
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_legacy'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Jepang', right: 'Tokyo' }]
+      })));
+    // NAMUN `pairDraft` tidak bisa menggantikan answer key: `pairs` tetap
+    // wajib >= 2 pasangan lengkap, apa pun isi draft-nya.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft_1pair'),
+      questionData({
+        type: 'matching',
+        pairs: [{ left: 'Indonesia', right: 'Jakarta' }],
+        pairDraft: { lefts: ['Indonesia', 'Jepang'], rights: ['Jakarta', 'Tokyo'], assigned: [0, null] }
+      })));
 
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order'),
       questionData({ type: 'ordering', items: ['Pertama', 'Kedua', 'Ketiga'] })));
@@ -1888,8 +2027,9 @@ async function main() {
   });
 
   // ---------- quizzes (CP1 foundation) ----------
+  // CATATAN CP2: `questionCount` tidak lagi ada di settings — jumlah soal kuis
+  // = panjang `questionIds`. Key-nya kini ditolak `hasOnly`.
   const quizSettings = (o = {}) => ({
-    questionCount: 10,
     randomizeQuestionOrder: false,
     randomizeOptionOrder: false,
     timeLimitMinutes: 0,
@@ -1948,7 +2088,7 @@ async function main() {
     await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_ok'), {
       title: 'Kuis Matematika (revisi)',
       questionIds: ['q_2opsi', 'q_ok_shared', 'q_20opsi'],
-      settings: quizSettings({ questionCount: 3, timeLimitMinutes: 15, showAnswerMode: 'after_each' }),
+      settings: quizSettings({ timeLimitMinutes: 15, showAnswerMode: 'after_each' }),
       updatedAt: serverTimestamp()
     }));
     // Partner boleh baca tapi tidak boleh mengubah / mengambil alih kuis.
@@ -1971,9 +2111,13 @@ async function main() {
     // 51 soal ditolak.
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_51'),
       quizData({ questionIds: quizIds(51) })));
-    // 0 soal ditolak (snapshot minimal 1).
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_kosong'),
+    // 0 soal SAH: kuis dibuat sebagai draft lalu soal ditambahkan dari editor.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_draft'),
       quizData({ questionIds: [] })));
+    // Menu ke draft kosong juga sah (mis. semua soal dikeluarkan dari kuis).
+    await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_50'),
+      { questionIds: [], updatedAt: serverTimestamp() }));
+    // 51 soal ditolak.
     // Duplikat ditolak.
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_dup'),
       quizData({ questionIds: ['q_ok_shared', 'q_ok_shared'] })));
@@ -2024,13 +2168,12 @@ async function main() {
     // Batas atas yang sah diterima.
     await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_setMaks'),
       quizData({ settings: quizSettings({
-        questionCount: 50, timeLimitMinutes: 480, passingScorePercent: 100, maxAttempts: 20
+        timeLimitMinutes: 480, passingScorePercent: 100, maxAttempts: 20
       }) })));
+    // CP2: `questionCount` bukan lagi field valid — rules menolak lewat hasOnly.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_countLama'),
+      quizData({ settings: quizSettings({ questionCount: 5 }) })));
     // Rentang nilai dilanggar.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_count0'),
-      quizData({ settings: quizSettings({ questionCount: 0 }) })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_count51'),
-      quizData({ settings: quizSettings({ questionCount: 51 }) })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_waktuMaks'),
       quizData({ settings: quizSettings({ timeLimitMinutes: 481 }) })));
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_lulusAngka'),
@@ -2075,6 +2218,258 @@ async function main() {
     // Konsekuensi penting: soal yang dipakai kuis itu UTUH di bank soal.
     await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_shared')));
     await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/questions/q_ok_shared')));
+  });
+
+  // ==========================================================
+  // CP2 — attempts (nested di bawah quizzes/{quizId})
+  // ==========================================================
+  // Kuis induk wajib ada: validQuizAttempt menolak attempt pada quiz hantu.
+  // CATATAN NAMA: prefiks `cp2` dipakai agar tidak bentrok dengan helper
+  // `attemptData` milik blok legacy `quizAttempts` (CP3-era) di atas.
+  //
+  // SKEMA v2: `questionSnapshot` memuat ISI LENGKAP tiap soal (bukan ID), agar
+  // attempt tidak ikut berubah saat soal di Question Bank diedit atau dihapus.
+  // `cp2Snap` sengaja memakai NAMA FIELD YANG SAMA dengan dokumen soal supaya
+  // `validSnapshotEntry` (rules) bisa memakai ulang `validQuestionTypeSpecific`
+  // apa adanya.
+  const cp2Snap = (o = {}) => ({
+    id: 'q_ok_shared',
+    type: 'single',
+    prompt: 'Berapa 1 + 1?',
+    points: 10,
+    options: ['1', '2', '3', '4'],
+    answerIndex: 1,
+    ...o
+  });
+
+  // Soal yang sudah hilang saat attempt dimulai (kasus tepi).
+  const cp2SnapUnavailable = (o = {}) => ({
+    id: 'q_hilang',
+    type: 'unavailable',
+    prompt: '',
+    points: 0,
+    available: false,
+    ...o
+  });
+
+  const cp2Answer = (o = {}) => ({
+    questionId: 'q_ok_shared',
+    userAnswer: 1,
+    isCorrect: true,
+    pointsEarned: 10,
+    needsManualGrade: false,
+    manualScore: null,
+    manualFeedback: '',
+    gradedBy: null,
+    gradedAt: null,
+    ...o
+  });
+
+  const cp2Attempt = (o = {}) => ({
+    uid: 'alice',
+    quizId: 'qu_ok',
+    startedAt: serverTimestamp(),
+    completedAt: null,
+    durationSeconds: null,
+    questionSnapshot: [cp2Snap()],
+    answers: [cp2Answer()],
+    score: 0,
+    maxScore: 0,
+    scorePercent: 0,
+    passed: false,
+    status: 'in_progress',
+    schemaVersion: 2,
+    ...o
+  });
+
+  const attemptPath = (id) => `spaces/space1/quizzes/qu_ok/attempts/${id}`;
+
+  await it('CP2/ATTEMPT: attempts privat — owner baca sendiri, user lain tidak bisa', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_privat')), cp2Attempt()));
+    await assertSucceeds(getDoc(doc(fsDb(alice), attemptPath('at_privat'))));
+    // Partner (anggota space) TIDAK boleh membaca attempt orang lain.
+    await assertFails(getDoc(doc(fsDb(bob), attemptPath('at_privat'))));
+    await assertFails(getDoc(doc(fsDb(carolCP3), attemptPath('at_privat'))));
+    // List pun tidak menyingkapkan attempt partner.
+    await assertFails(getDocs(collection(fsDb(bob), 'spaces/space1/quizzes/qu_ok/attempts')));
+  });
+
+  await it('CP2/ATTEMPT: create valid hanya untuk pemilik; uid/status palsu ditolak', async () => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_create')),
+      cp2Attempt({
+        questionSnapshot: [
+          cp2Snap(),
+          cp2Snap({ id: 'q_2opsi', options: ['Ya', 'Tidak'], answerIndex: 0 })
+        ],
+        answers: [cp2Answer(), cp2Answer({ questionId: 'q_2opsi' })]
+      })));
+    // uid harus pemanggil.
+    await assertFails(setDoc(doc(fsDb(bob), attemptPath('at_uidPalsu')), cp2Attempt({ uid: 'alice' })));
+    // Attempts hanya boleh dibuat dengan status in_progress.
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_langsungSelesai')),
+      cp2Attempt({ status: 'completed' })));
+    // quizId harus cocok dengan path, dan kuis harus benar-benar ada.
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_quizIdPalsu')),
+      cp2Attempt({ quizId: 'qu_lain' })));
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_hantu/attempts/at1'),
+      cp2Attempt({ quizId: 'qu_hantu' })));
+    // Jumlah answers harus sama dengan questionSnapshot.
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_answersKosong')), cp2Attempt({ answers: [] })));
+    // Non-member tidak boleh membuat attempt.
+    await assertFails(setDoc(doc(fsDb(carolCP3), attemptPath('at_carol')), cp2Attempt({ uid: 'carol' })));
+  });
+
+  await it('CP2/ATTEMPT: field struktural immutable; jawaban terkunci setelah ditutup', async () => {
+    const p = attemptPath('at_immutable');
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
+    // Immutable: uid, quizId, startedAt, questionSnapshot, schemaVersion.
+    await assertFails(updateDoc(doc(fsDb(alice), p), { uid: 'bob' }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), { quizId: 'qu_lain' }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), { startedAt: new Date() }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), {
+      questionSnapshot: [cp2Snap({ answerIndex: 3 })]
+    }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), { schemaVersion: 1 }));
+    // Selama masih in_progress, answers boleh diubah (menyimpan jawaban).
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 2 })] }));
+    // Tutup attempt.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
+      status: 'completed', completedAt: serverTimestamp(), score: 0, maxScore: 10, scorePercent: 0
+    }));
+    // Setelah tertutup, answers terkunci.
+    await assertFails(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 0 })] }));
+  });
+
+  // Attempt yang sudah SELESAI dengan satu soal manual. Wajib dibuat lewat dua
+  // langkah: create selalu `in_progress` (ditegakkan rules), baru di-update ke
+  // `pending_manual_grade` oleh pemiliknya.
+  const seedFinishedWithManual = async (path) => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), path), cp2Attempt({
+      answers: [cp2Answer({ needsManualGrade: true, isCorrect: null, pointsEarned: 0 })]
+    })));
+    await assertSucceeds(updateDoc(doc(fsDb(alice), path), {
+      status: 'pending_manual_grade',
+      completedAt: serverTimestamp(),
+      score: 0,
+      maxScore: 10,
+      scorePercent: 0
+    }));
+  };
+
+  await it('CP2/ATTEMPT: snapshot berisi isi soal — bentuk salah & user lain ditolak', async () => {
+    // Skema snapshot: entri harus memuat isi soal, bukan ID.
+    // (a) Bentuk yang tidak bisa dinilai DITOLAK saat create.
+    // CATATAN: jangan pakai nilai `undefined` di fixture — Firestore SDK menolaknya
+    // sebelum rules sempat evaluates, jadi testnya akan gagal karena alasan salah.
+    const bad = [
+      ['id saja, tanpa isi soal', { id: 'q_id_only', type: 'single', prompt: 'Tanpa opsi', points: 10 }],
+      ['tipe tidak dikenal', cp2Snap({ type: 'mystery' })],
+      ['tanpa id', cp2Snap({ id: '' })],
+      ['prompt bukan string', cp2Snap({ prompt: 42 })],
+      ['poin 0 untuk soal nyata', cp2Snap({ points: 0 })],
+      ['poin melebihi batas', cp2Snap({ points: 101 })],
+      ['kunci di luar rentang opsi', cp2Snap({ answerIndex: 9 })],
+      ['entri unavailable menyamar sebagai soal utuh', cp2SnapUnavailable({ answerIndex: 0 })],
+      ['entri unavailable membawa kunci', cp2SnapUnavailable({ correctBoolean: true })],
+      ['entri unavailable bukan 0 poin', cp2SnapUnavailable({ points: 10 })],
+      ['soal nyata menyamar available:false', cp2Snap({ available: false })]
+    ];
+    for (const [i, [label, entry]] of bad.entries()) {
+      // Label dibungkus ke dalam error supaya kegagalan tahu fixture mana yang
+      // bocor (hanya entri pertama yang divalidasi rules, jadi nomor indeks
+      // ikut ditulis agar tidak ambigu).
+      try {
+        await assertFails(
+          setDoc(doc(fsDb(alice), attemptPath(`at_snap_${i}`)), cp2Attempt({ questionSnapshot: [entry] }))
+        );
+      } catch (err) {
+        throw new Error(`[${i}] ${label}: ${err.message}`);
+      }
+    }
+    // (b) Bentuk yang valid DITERIMA, termasuk entri `unavailable` untuk soal
+    // yang sudah hilang sebelum attempt dimulai. `answers` harus selaras
+    // jumlah dengan `questionSnapshot` (satu entri per soal).
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_snap_ok')),
+      cp2Attempt({
+        questionSnapshot: [cp2Snap(), cp2SnapUnavailable()],
+        answers: [cp2Answer(), cp2Answer({ questionId: 'q_hilang', isCorrect: null, needsManualGrade: true, pointsEarned: 0 })]
+      })));
+    // (c) Snapshot TIDAK BOLEH diubah user lain — partner maupun non-member.
+    await assertFails(updateDoc(doc(fsDb(bob), attemptPath('at_snap_ok')),
+      { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+    await assertFails(updateDoc(doc(fsDb(carolCP3), attemptPath('at_snap_ok')),
+      { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+    // (d) Owners sendiri tidak boleh menyusun ulang snapshot (immutable).
+    // CATATAN: nilai HARUS benar-benar berbeda — `changed()` tidak menghitung
+    // key yang nilainya tidak berubah, jadi menulis nilai yang sama lolos
+    // sebagai no-op (lihat catatan similar di blok penilaian manual).
+    await assertFails(updateDoc(doc(fsDb(alice), attemptPath('at_snap_ok')),
+      { questionSnapshot: [cp2Snap({ prompt: 'Berapa 1 + 1? (revisi)' })] }));
+  });
+
+  await it('CP2/ATTEMPT: partner boleh nilai manual — hanya field manual', async () => {
+    const p = attemptPath('at_manual');
+    await seedFinishedWithManual(p);
+    // CATATAN: `serverTimestamp()` TIDAK boleh dipakai di dalam array — SDK
+    // menolaknya ("serverTimestamp() is not currently supported inside arrays").
+    // Karena `gradedAt` berada di dalam entri `answers`, test memakai timestamp
+    // konkret. Konsekuensi sama untuk kode produksi: `gradeAnswerManually`
+    // menulis `new Date()` untuk gradedAt, bukan serverTimestamp().
+    const withScore = [cp2Answer({
+      needsManualGrade: true, isCorrect: null, pointsEarned: 0,
+      manualScore: 8, manualFeedback: 'Bagus', gradedBy: 'bob', gradedAt: new Date()
+    })];
+    // Partner (anggota space) boleh menulis nilai manual.
+    await assertSucceeds(updateDoc(doc(fsDb(bob), p), { answers: withScore }));
+    // Non-member TIDAK boleh — bahkan pada field manual.
+    await assertFails(updateDoc(doc(fsDb(carolCP3), p), { answers: withScore }));
+    // Partner tidak boleh menyentuh score/final-state.
+    await assertFails(updateDoc(doc(fsDb(bob), p), { score: 100 }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+    // CATATAN: nilai yang TIDAK berubah tidak dihitung `changed()`, jadi untuk
+    // membuktikan field terlarang selalu dikunci, nilai baru harus benar-benar
+    // berbeda dari yang tersimpan (mis. `maxScore: 10` memang sudah 10 sejak
+    // seed, jadi menulisnya lagi tidak melanggar apa pun).
+    await assertFails(updateDoc(doc(fsDb(bob), p), { maxScore: 999 }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { scorePercent: 100 }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { passed: true }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { status: 'graded' }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { completedAt: serverTimestamp() }));
+    // Owner boleh menutup attempt (mulai dari in_progress) tetapi TIDAK boleh
+    // mengubah `answers` setelah ditutup.
+    // Partner tidak boleh menyamarkan perubahan userAnswer / nilai otomatis di
+    // dalam array answers saat menulis nilai manual.
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
+      userAnswer: 99, needsManualGrade: true, isCorrect: null, pointsEarned: 0, manualScore: 10
+    })] }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
+      userAnswer: 1, isCorrect: false, pointsEarned: 10, needsManualGrade: true, manualScore: 10
+    })] }));
+    // Jumlah array answers harus sama.
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [] }));
+  });
+
+  await it('CP2/ATTEMPT: partner tidak boleh menilai attempt yang masih berjalan', async () => {
+    const p = attemptPath('at_baru');
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt({
+      answers: [cp2Answer({ needsManualGrade: true, isCorrect: null, pointsEarned: 0 })]
+    })));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
+      needsManualGrade: true, isCorrect: null, pointsEarned: 0, manualScore: 8
+    })] }));
+  });
+
+  await it('CP2/ATTEMPT: owner boleh finalisasi skor setelah nilai manual ada', async () => {
+    const p = attemptPath('at_final');
+    await seedFinishedWithManual(p);
+    // Recompute oleh owner: hanya field skor/status, TIDAK menyentuh answers —
+    // inilah yang menjaga nilai manual partner tidak tertimpa.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
+      score: 8, maxScore: 10, scorePercent: 80, passed: true, status: 'graded'
+    }));
+    // Attempt adalah catatan historis: tidak boleh dihapus siapa pun.
+    await assertFails(deleteDoc(doc(fsDb(alice), p)));
+    await assertFails(deleteDoc(doc(fsDb(bob), p)));
   });
 
   await testEnv.cleanup();

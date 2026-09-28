@@ -1,10 +1,11 @@
-import { IconRoadmap } from '../../../shared/icons';
+import { IconArrowDown, IconArrowUp, IconChevronDown, IconChevronRight, IconEdit, IconLink, IconNotes, IconRoadmap, IconSwap, IconTrash } from '../../../shared/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
 import Badge from '../../../shared/ui/Badge';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
@@ -63,7 +64,11 @@ function NodeRow({ node, ctx, first, last }) {
              hasKids ? 'h-11 w-11 text-dim hover:text-ink' : 'h-11 w-11 text-dimmer'
           }`}
         >
-          {hasKids ? (open ? '▾' : '▸') : '·'}
+          {hasKids ? (
+            open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />
+          ) : (
+            <span className="text-[13px] leading-none">·</span>
+          )}
         </button>
 
         <span
@@ -81,13 +86,15 @@ function NodeRow({ node, ctx, first, last }) {
           <span className="truncate text-[14px] font-medium text-ink">{t.title}</span>
           <span className="font-mono text-[9.5px] uppercase leading-relaxed tracking-[.06em] text-dimmer">
             {/* Jumlah materi ikut di bawah judul agar tetap terbaca di mobile. */}
-            <span className="sm:hidden">📝{s.notes || 0} · 🔗{s.resources || 0} · </span>
+            <span className="sm:hidden inline-flex items-center gap-1">
+              <IconNotes size={12} />{s.notes || 0} · <IconLink size={12} />{s.resources || 0} ·{' '}
+            </span>
             {label}
           </span>
         </Link>
 
-        <span className="hidden shrink-0 font-mono text-[10px] tracking-[.03em] text-dimmer sm:inline">
-          📝{s.notes || 0} · 🔗{s.resources || 0}
+        <span className="hidden shrink-0 items-center gap-1 font-mono text-[10px] tracking-[.03em] text-dimmer sm:inline-flex">
+          <IconNotes size={12} />{s.notes || 0} · <IconLink size={12} />{s.resources || 0}
         </span>
 
         <Badge tone={statusTone(t.status)}>{statusLabel(t.status)}</Badge>
@@ -107,30 +114,30 @@ function NodeRow({ node, ctx, first, last }) {
           )}
           {t.level > 0 && (
             <RowAction title="Pindahkan" label="Pindahkan topik" onClick={() => ctx.onMove(t)}>
-              ⇄
+              <IconSwap size={15} />
             </RowAction>
           )}
           {!first && (
             <RowAction title="Naik" label="Pindah urutan ke atas" onClick={() => ctx.onReorder(t, -1)}>
-              ↑
+              <IconArrowUp size={15} />
             </RowAction>
           )}
           {!last && (
             <RowAction title="Turun" label="Pindah urutan ke bawah" onClick={() => ctx.onReorder(t, 1)}>
-              ↓
+              <IconArrowDown size={15} />
             </RowAction>
           )}
           <RowAction title="Edit" label="Edit topik" onClick={() => ctx.onEdit(t)}>
-            ✎
+            <IconEdit size={15} />
           </RowAction>
           <RowAction title="Hapus" label="Hapus topik" onClick={() => ctx.onDelete(t)}>
-            🗑
+            <IconTrash size={15} />
           </RowAction>
         </div>
       </div>
 
       {hasKids && open && (
-        <div className="ml-4 border-l border-linestrong/70 pl-1 sm:ml-5">
+        <div className="ml-4 border-l border-[color-mix(in_srgb,var(--border-strong)_70%,transparent)] pl-1 sm:ml-5">
           {node.children.map((c, ci) => (
             <NodeRow
               key={c.topic.id}
@@ -271,7 +278,7 @@ export default function RoadmapPage() {
           </p>
           <p className="text-dimmer">
             Topik yang sudah ada tidak diubah & tidak dihapus. Kalau tidak dipakai, hapus lagi lewat
-            tombol 🗑.
+            tombol Hapus.
           </p>
         </>
       ) : (
@@ -307,22 +314,20 @@ export default function RoadmapPage() {
 
   return (
     <div className="space-y-5">
-      <header className="card flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="eyebrow">learning berdua · perencanaan</div>
-          <h1 className="font-head text-2xl text-ink">🗺️ Roadmap</h1>
-          <p className="mt-1 text-[13.5px] leading-relaxed text-dim">
-            Pohon belajar 3 level: Subject → Topic → Subtopic. Klik judul untuk halaman detail
-            berisi Notes & Resources.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="ghost" onClick={openImport}>
-            ＋ Import template roadmap
-          </Button>
-          <Button onClick={() => openCreate(null)}>＋ Subject</Button>
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="learning berdua · perencanaan"
+        icon={<IconRoadmap size={26} />}
+        title="Roadmap"
+        description="Pohon belajar 3 level: Subject → Topic → Subtopic. Klik judul untuk halaman detail berisi Notes & Resources."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={openImport}>
+              ＋ Import template roadmap
+            </Button>
+            <Button onClick={() => openCreate(null)}>＋ Subject</Button>
+          </div>
+        }
+      />
 
       {topics.length > 0 && (
         <div className="flex items-center justify-between">
@@ -344,9 +349,7 @@ export default function RoadmapPage() {
       )}
 
       {loading && (
-        <div className="flex justify-center py-16">
-          <Spinner size={28} />
-        </div>
+        <PageLoading label="Memuat roadmap…" />
       )}
       {error && <p className="text-[13.5px] text-accent">{error}</p>}
 

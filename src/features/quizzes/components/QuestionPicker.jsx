@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import Badge from '../../../shared/ui/Badge';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { QUESTION_TYPE_LABELS, STATUS_LABEL } from '../../../lib/constants';
 
 // Panel pemilihan soal tersimpan (reusable). Presentasional: TIDAK membuka listener
@@ -92,11 +92,9 @@ export default function QuestionPicker({
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-8">
-          <Spinner />
-        </div>
+        <PageLoading label="Memuat soal…" size={24} compact />
       ) : error ? (
-        <p className="rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
+        <p className="rounded-smc border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-2 text-[13px] text-ink">
           Gagal memuat bank soal: {error.message || String(error)}
         </p>
       ) : filtered.length === 0 ? (

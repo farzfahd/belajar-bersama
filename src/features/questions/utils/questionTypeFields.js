@@ -8,6 +8,8 @@
 // Tidak ada evaluator / sandbox / eksekusi kode di sini: tipe `code` hanya
 // menyimpan teks, penilaiannya manual.
 
+import { isValidPairDraft } from './matchingPairs.js';
+
 export const OPTION_MIN = 2;
 export const OPTION_MAX = 20;
 export const MAX_SUB_QUESTIONS = 10;
@@ -84,6 +86,30 @@ function requirePairs(raw) {
   return pairs;
 }
 
+/**
+ * Draft editor menjodohkan (`pairDraft`) dinormalisasi atau dibuang.
+ *
+ * Sifatnya OPSIONAL: soal lama tidak punya field ini sama sekali, dan itu
+ * tidak boleh jadi error. Mengembalikan `null` berarti "tidak ada draft yang
+ * bisa dipercaya" - pemanggil lalu tidak menulis field tersebut sama sekali
+ * (dari sisi Firestore, `undefined` = tidak berubah).
+ *
+ * Ini sengaja TIDAK mengubah aturan `requirePairs`. Yang divalidasi di sini
+ * hanya KESALAHAN STRUKTUR draft, bukan kelengkapan answer key: draft boleh punya
+ * baris belum dipasangkan, sedangkan `pairs` tetap harus punya minimal 2
+ * pasangan lengkap agar attempt punya kunci jawaban yang bisa dinilai.
+ */
+export function normalizePairDraft(raw) {
+  if (raw == null) return null;
+  if (!isValidPairDraft(raw)) return null;
+  const { lefts, rights, assigned } = raw;
+  return {
+    lefts: lefts.map((t) => String(t ?? '')),
+    rights: rights.map((t) => String(t ?? '')),
+    assigned: assigned.map((v) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < rights.length ? v : null))
+  };
+}
+
 function requireItems(raw) {
   const items = cleanList(raw).filter(Boolean);
   if (items.length < 2) {
@@ -137,7 +163,13 @@ function normalizeSubQuestion(raw) {
     return { type, acceptedAnswers: requireAcceptedAnswers(raw.acceptedAnswers) };
   }
   if (type === 'matching') {
-    return { type, pairs: requirePairs(raw.pairs) };
+    const fields = { pairs: requirePairs(raw.pairs) };
+    // Draft editor opsional: ikut ditulis kalau ada & strukturnya benar, dan
+    // TIDAK ditulis sama sekali kalau tidak - sehingga soal lama yang belum
+    // punya `pairDraft` tidak pernah tersentuh bentuknya.
+    const draft = normalizePairDraft(raw.pairDraft);
+    if (draft) fields.pairDraft = draft;
+    return fields;
   }
   if (type === 'ordering') {
     return { type, items: requireItems(raw.items) };
@@ -187,7 +219,10 @@ export function buildTypeFields(type, data = {}) {
     return { sampleAnswer: String(data.sampleAnswer || '').trim().slice(0, 5000) };
   }
   if (type === 'matching') {
-    return { pairs: requirePairs(data.pairs) };
+    const fields = { pairs: requirePairs(data.pairs) };
+    const draft = normalizePairDraft(data.pairDraft);
+    if (draft) fields.pairDraft = draft;
+    return fields;
   }
   if (type === 'ordering') {
     return { items: requireItems(data.items) };

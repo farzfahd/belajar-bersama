@@ -1,13 +1,14 @@
+import { IconArrowRight, IconExternalLink, IconFolder, IconNotes } from '../../../shared/icons';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Modal from '../../../shared/ui/Modal';
 import Input from '../../../shared/ui/Input';
-import Spinner from '../../../shared/components/Spinner';
+import PageLoading from '../../../shared/components/PageLoading';
 import { isHttpUrl } from '../../../shared/utils/validate';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
 import { useGlobalSearch } from '../hooks/useGlobalSearch';
-import { resourceTypeIcon } from '../../resources/utils/icons';
+import ResourceTypeIcon from '../../resources/components/ResourceTypeIcon';
 
 const KIND_LABEL = {
   topic: 'Topik',
@@ -16,9 +17,9 @@ const KIND_LABEL = {
 };
 
 function kindIcon(result) {
-  if (result.kind === 'topic') return '🗺️';
-  if (result.kind === 'note') return '📝';
-  return resourceTypeIcon(result.type);
+  if (result.kind === 'topic') return <IconFolder size={16} />;
+  if (result.kind === 'note') return <IconNotes size={16} />;
+  return <ResourceTypeIcon type={result.type} size={16} />;
 }
 
 function SearchResult({ result, onSelect }) {
@@ -49,7 +50,7 @@ function SearchResult({ result, onSelect }) {
         )}
       </span>
       <span className="mt-2 shrink-0 text-dimmer" aria-hidden="true">
-        {result.kind === 'resource' ? '↗' : '→'}
+        {result.kind === 'resource' ? <IconExternalLink size={14} /> : <IconArrowRight size={14} />}
       </span>
     </button>
   );
@@ -144,9 +145,7 @@ export default function GlobalSearchDialog({ open, onClose }) {
         </div>
 
         {loading && (
-          <div className="flex justify-center py-10">
-            <Spinner size={24} />
-          </div>
+          <PageLoading label="Mencari…" size={24} compact />
         )}
         {error && <p className="py-5 text-[13px] text-accent">{error}</p>}
         {!loading && !error && results.length === 0 && (

@@ -1,3 +1,4 @@
+import { IconCopy, IconWarn } from '../../../shared/icons';
 import { useEffect, useState } from 'react';
 import Button from '../../../shared/ui/Button';
 import { useToast } from '../../../shared/components/ToastProvider';
@@ -74,12 +75,13 @@ export default function InviteCard({ spaceId, space, pending = false }) {
             {code}
           </div>
           <Button onClick={copy} loading={copying} variant="ghost" className="w-full">
-            ⧉ Salin kode
+            <IconCopy size={15} /> Salin kode
           </Button>
-          <p className="text-[12.5px] leading-relaxed text-warn">
-            ⚠️ Bagikan lewat kanal privat (chat langsung/WhatsApp), bukan media publik.
+          <p className="flex gap-1.5 text-[12.5px] leading-relaxed text-warn">
+            <IconWarn size={15} className="mt-0.5 shrink-0" />
+            <span>Bagikan lewat kanal privat (chat langsung/WhatsApp), bukan media publik.
             Kode sekali pakai &amp; berlaku 24 jam — siapa pun yang memegangnya
-            <b> sebelum dipakai</b> bisa bergabung mendahului Anda.
+            <b> sebelum dipakai</b> bisa bergabung mendahului Anda.</span>
           </p>
         </div>
       ) : (

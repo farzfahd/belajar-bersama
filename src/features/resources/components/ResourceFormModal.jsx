@@ -7,7 +7,7 @@ import TagInput from '../../../shared/ui/TagInput';
 import { useTagSuggestions } from '../../search/hooks/useTagSuggestions';
 import { createResource, updateResource } from '../services/resourceService';
 import { STATUS, STATUS_LABEL } from '../../../lib/constants';
-import { detectResourceType, resourceTypeIcon } from '../utils/icons';
+import { detectResourceType } from '../utils/icons';
 import { toErrorMessage } from '../../../shared/utils/errors';
 import { normalizeTags } from '../../../shared/utils/validate';
 
@@ -181,7 +181,7 @@ export default function ResourceFormModal({
           <Select label="Jenis" value={form.type} onChange={set('type')}>
             {STATUS.resource.map((t) => (
               <option key={t} value={t}>
-                {resourceTypeIcon(t)} {STATUS_LABEL[t]}
+                {STATUS_LABEL[t]}
               </option>
             ))}
           </Select>

@@ -1,10 +1,10 @@
+import { IconClose } from '../../shared/icons';
 import { useEffect, useRef } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useAuthState } from '../../features/auth/hooks/useAuthState';
 import { useProfile } from '../../features/auth/hooks/useProfile';
 import { NAV, isNavItemActive } from './navConfig';
 import NavIcon from '../../shared/icons/NavIcon';
-import { IconClose } from '../../shared/icons';
 import Avatar from '../../shared/components/Avatar';
 
 const FOCUSABLE =
@@ -81,7 +81,7 @@ export default function Drawer({ open, onClose }) {
       }}
     >
        <div
-         className="absolute inset-0 bg-[rgba(26,23,20,.68)]"
+         className="absolute inset-0 bg-[var(--scrim)] backdrop-blur-[2px]"
          aria-hidden="true"
          onMouseDown={() => onClose()}
        />

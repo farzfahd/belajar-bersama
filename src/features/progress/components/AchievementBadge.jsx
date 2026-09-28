@@ -1,4 +1,27 @@
+import {
+  IconAchievements,
+  IconFlag,
+  IconLink,
+  IconMind,
+  IconNotes,
+  IconRoadmap,
+  IconUsers
+} from '../../../shared/icons';
 import Badge from '../../../shared/ui/Badge';
+
+const ICON_BY_KEY = {
+  roadmap: IconRoadmap,
+  notes: IconNotes,
+  link: IconLink,
+  users: IconUsers,
+  mind: IconMind,
+  flag: IconFlag
+};
+
+function AchievementIcon({ name }) {
+  const Icon = ICON_BY_KEY[name] || IconAchievements;
+  return <Icon size={28} />;
+}
 
 export default function AchievementBadge({ achievement }) {
   return (
@@ -12,7 +35,7 @@ export default function AchievementBadge({ achievement }) {
           className={`text-3xl leading-none ${achievement.unlocked ? '' : 'grayscale opacity-[.35]'}`}
           aria-hidden="true"
         >
-          {achievement.icon}
+          <AchievementIcon name={achievement.icon} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

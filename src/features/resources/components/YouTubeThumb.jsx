@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { resourceTypeIcon, youtubeThumb } from '../utils/icons';
+import { youtubeThumb } from '../utils/icons';
+import ResourceTypeIcon from './ResourceTypeIcon';
 
 // Thumbnail YouTube untuk resource bertipe youtube. Butuh internet: bila gagal
 // dimuat (offline, diblokir, atau URL bukan video) jatuh ke ikon jenis — tidak
@@ -18,7 +19,7 @@ export default function YouTubeThumb({ url, type = 'youtube', className = '' }) 
         className={`flex shrink-0 items-center justify-center rounded-smc border border-line bg-bg2 text-[15px] ${className}`}
         aria-hidden="true"
       >
-        {resourceTypeIcon(type)}
+        <ResourceTypeIcon type={type} size={17} />
       </span>
     );
   }

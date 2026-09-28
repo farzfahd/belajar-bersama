@@ -3,21 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-     <meta id="theme-color" name="theme-color" content="#1a1714" />
-     <meta name="description" content="Buku belajar privat untuk dua orang" />
+    <!-- Nilai ini hanya cadangan: itu --bg tema default gelap, dan selalu
+         ditimpa themeBoot.js sebelum frame pertama (atau oleh ThemeProvider).
+         Dipakai sebagai fallback kalau CSS/JS belum tersedia. -->
+    <meta id="theme-color" name="theme-color" content="#0a0e14" />
+    <meta name="description" content="Buku belajar privat untuk dua orang" />
     <title>Belajar Bersama</title>
 
-    <!-- Body font: Plus Jakarta Sans (token --font-body di src/index.css).
-         Hanya dimuat di produksi/online; saat offline browser otomatis jatuh ke
-         system-ui di token tersebut, sehingga tampilan tetap wajar.
-         Head (Newsreader) & mono (JetBrains Mono) sengaja BELUM dimuat di sini —
-         penggantiannya bagian dari Phase 3. -->
+    <!-- CSP diinjeksi plugin `inject-csp` (vite.config.js) tepat di titik ini.
+         JANGAN placeholder ini dihapus: html.replace() akan diam-diam tidak
+         menemukan target dan CSP TIDAK PERNAH masuk ke build (terbukti di
+         checkpoint App Check 2026-09-27 — semua proteksi yang ditulis di
+         vite.config.js sebenarnya tidak aktif di produksi). -->
+    <!--CSP-->
+
+    <!-- Font TEMA DEFAULT: Newsreader (head/serif), Plus Jakarta Sans (body),
+         JetBrains Mono (label). Hanya tema ini yang dimuat di sini karena ini
+         nilai fallback sebelum JS membaca localStorage — muat keenam tema
+         sekaligus akan menarik 15 file font untuk satu pengguna yang cuma
+         memakai satu tema. Tema lain dimuat lazy oleh src/app/themeFonts.js
+         begitu dipilih.
+         Saat offline (atau font gagal dimuat) browser otomatis jatuh ke
+         system-ui/Georgia/Consolas yang sudah ada di tiap token --font-*, jadi
+         tampilan tetap terbaca. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap"
     />
+
+    <!-- Script anti-flash: memasang data-color-theme + data-mode dari
+         localStorage SEBELUM render pertama. String script dan hash CSP-nya
+         disuntikkan plugin yang sama dari src/app/themeBoot.js — JANGAN ditulis
+         manual di sini, karena hash harus cocok persis dengan isi script. -->
+    <!--THEME-BOOT-->
   </head>
   <body>
     <div id="root"></div>

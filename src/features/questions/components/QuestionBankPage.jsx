@@ -1,8 +1,11 @@
+import { IconQuestion } from '../../../shared/icons';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import PageHeader from '../../../app/layout/PageHeader';
 import Button from '../../../shared/ui/Button';
 import EmptyState from '../../../shared/ui/EmptyState';
-import Spinner from '../../../shared/components/Spinner';
+import ConfirmDialog from '../../../shared/ui/ConfirmDialog';
+import PageLoading from '../../../shared/components/PageLoading';
 import { useToast } from '../../../shared/components/ToastProvider';
 import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
@@ -19,6 +22,7 @@ import {
 import QuestionCard from './QuestionCard';
 import QuestionFormModal from './QuestionFormModal';
 import QuestionDetailModal from './QuestionDetailModal';
+import QuestionReportModal from './QuestionReportModal';
 import { QUESTION_TYPE_LABELS } from '../../../lib/constants';
 import { toErrorMessage } from '../../../shared/utils/errors';
 
@@ -45,6 +49,7 @@ export default function QuestionBankPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [previewTarget, setPreviewTarget] = useState(null);
+  const [reportTarget, setReportTarget] = useState(null);
 
   const activeQuestions = useMemo(() => {
     return questions.filter((q) => !q.deletedAt);
@@ -70,14 +75,25 @@ export default function QuestionBankPage() {
     });
   }, [tab, activeQuestions, trashQuestions, selectedTopic, selectedType, selectedDifficulty, search]);
 
+  // Aksi merusak lewat dialog yang sama dengan halaman lain (bukan
+  // window.confirm) supaya tampilannya konsisten dan konsekuensinya terbaca.
+  const [confirm, setConfirm] = useState(null);
+
   const handleTrash = async (q) => {
-    if (!window.confirm(`Pindahkan soal "${q.prompt.slice(0, 40)}..." ke Sampah?`)) return;
-    try {
-      await softDeleteQuestion(spaceId, q.id);
-      toast.success('Soal dipindahkan ke Sampah.');
-    } catch (err) {
-      toast.error(toErrorMessage(err, 'Gagal memindahkan soal ke sampah.'));
-    }
+    setConfirm({
+      title: 'Pindahkan soal ke Sampah?',
+      body: `"${(q.prompt || '').slice(0, 60)}" akan dipindahkan ke Sampah. Soal bisa dipulihkan kapan saja dari tab Sampah, dan tidak ikut terhapus dari kuis yang memakainya.`,
+      confirmLabel: 'Pindahkan ke Sampah',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await softDeleteQuestion(spaceId, q.id);
+          toast.success('Soal dipindahkan ke Sampah.');
+        } catch (err) {
+          toast.error(toErrorMessage(err, 'Gagal memindahkan soal ke sampah.'));
+        }
+      }
+    });
   };
 
   const handleRestore = async (q) => {
@@ -90,45 +106,55 @@ export default function QuestionBankPage() {
   };
 
   const handlePurge = async (q) => {
-    if (!window.confirm('Hapus soal ini secara permanen? Tindakan ini tidak dapat dibatalkan.')) return;
-    try {
-      await purgeQuestion(spaceId, q.id);
-      toast.success('Soal dihapus permanen.');
-    } catch (err) {
-      toast.error(toErrorMessage(err, 'Gagal menghapus soal.'));
-    }
+    setConfirm({
+      title: 'Hapus soal permanen?',
+      body: `"${(q.prompt || '').slice(0, 60)}" akan dihapus permanen, termasuk riwayatnya. Tindakan ini tidak bisa dibatalkan. Kalau masih diperlukan, pindahkan ke Sampah saja.`,
+      confirmLabel: 'Hapus permanen',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await purgeQuestion(spaceId, q.id);
+          toast.success('Soal dihapus permanen.');
+        } catch (err) {
+          toast.error(toErrorMessage(err, 'Gagal menghapus soal.'));
+        }
+      }
+    });
   };
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header className="card flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4">
-        <div>
-          <div className="eyebrow">learning berdua · pustaka soal</div>
-          <h1 className="font-head text-2xl text-ink">Soal Tersimpan</h1>
-          <p className="text-[13.5px] leading-relaxed text-dim">
-            Semua soal yang pernah dibuat, milikmu dan partner. Bisa dipakai ulang di banyak kuis.
-          </p>
-          <p className="mt-1 text-[12.5px] text-dimmer">
-            Halaman ini adalah pustaka, bukan menu utama. Soal biasanya dibuat dari dalam Quiz Editor.{' '}
-            <button
-              type="button"
-              onClick={() => navigate('/quiz')}
-              className="underline underline-offset-2 hover:text-ink"
-            >
-              Buka Quiz
-            </button>
-          </p>
-        </div>
-        <Button
-          onClick={() => {
-            setEditTarget(null);
-            setFormOpen(true);
-          }}
-        >
-          ＋ Buat Soal Baru
-        </Button>
-      </header>
+      <PageHeader
+        eyebrow="learning berdua · pustaka soal"
+        icon={<IconQuestion size={26} />}
+        title="Soal Tersimpan"
+        description={
+          <>
+            <span>Semua soal yang pernah dibuat, milikmu dan partner. Bisa dipakai ulang di banyak kuis.</span>
+            <span className="block mt-1 text-[12.5px] text-dimmer">
+              Halaman ini adalah pustaka, bukan menu utama. Soal biasanya dibuat dari dalam Quiz Editor.{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/quiz')}
+                className="underline underline-offset-2 hover:text-ink"
+              >
+                Buka Quiz
+              </button>
+            </span>
+          </>
+        }
+        actions={
+          <Button
+            onClick={() => {
+              setEditTarget(null);
+              setFormOpen(true);
+            }}
+          >
+            ＋ Buat Soal Baru
+          </Button>
+        }
+      />
 
       {/* Tabs & Search Filter */}
       <div className="space-y-3">
@@ -175,7 +201,7 @@ export default function QuestionBankPage() {
             <option value="">Semua Topik</option>
             {topics.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.level === 0 ? '📁 ' : t.level === 1 ? '  └─ ' : '    └─ '}
+                {t.level === 0 ? 'Topik: ' : t.level === 1 ? '  └─ ' : '    └─ '}
                 {t.title}
               </option>
             ))}
@@ -209,11 +235,9 @@ export default function QuestionBankPage() {
 
       {/* Questions List */}
       {loading ? (
-        <div className="py-12 flex justify-center">
-          <Spinner />
-        </div>
+        <PageLoading label="Memuat bank soal…" />
       ) : error ? (
-        <div className="p-4 rounded-smc border border-accent/40 bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] text-ink text-[13.5px]">
+        <div className="p-4 rounded-smc border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] text-ink text-[13.5px]">
           Gagal memuat bank soal: {error.message || String(error)}
         </div>
       ) : filteredQuestions.length === 0 ? (
@@ -248,6 +272,7 @@ export default function QuestionBankPage() {
                 onTrash={handleTrash}
                 onRestore={handleRestore}
                 onPurge={handlePurge}
+                onReport={setReportTarget}
               />
             );
           })}
@@ -266,9 +291,23 @@ export default function QuestionBankPage() {
       <QuestionDetailModal
         open={Boolean(previewTarget)}
         onClose={() => setPreviewTarget(null)}
+        spaceId={spaceId}
         question={previewTarget}
         isOwner={previewTarget?.createdBy === user?.uid}
+        onReport={(q) => {
+          setPreviewTarget(null);
+          setReportTarget(q);
+        }}
       />
+
+      <QuestionReportModal
+        open={Boolean(reportTarget)}
+        spaceId={spaceId}
+        question={reportTarget}
+        onClose={() => setReportTarget(null)}
+      />
+
+      <ConfirmDialog action={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

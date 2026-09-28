@@ -116,13 +116,14 @@ test('kombinasi: remove lalu append pada kuis kecil tetap valid', () => {
 });
 
 
-test('questionIds: 1 dan 50 soal sah (batas bawah & atas)', () => {
+test('questionIds: 0, 1, dan 50 soal sah (draft kuis boleh tanpa soal)', () => {
+  // Kuis boleh dibuat lebih dulu tanpa soal, lalu soal ditambahkan dari editor.
+  assert.deepEqual(normalizeQuestionIds([]), []);
   assert.deepEqual(normalizeQuestionIds(['q1']), ['q1']);
   assert.equal(normalizeQuestionIds(ids(50)).length, 50);
 });
 
-test('questionIds: 0 dan 51 soal ditolak', () => {
-  assert.throws(() => normalizeQuestionIds([]), /minimal 1 soal/);
+test('questionIds: 51 soal tetap ditolak (batas atas tidak dilonggarkan)', () => {
   assert.throws(() => normalizeQuestionIds(ids(51)), /maksimal 50 soal/);
 });
 
@@ -147,21 +148,29 @@ test('settings: default dipakai utuh saat input kosong', () => {
   assert.deepEqual(normalizeQuizSettings(null), { ...QUIZ_SETTINGS_DEFAULTS });
 });
 
-test('settings: semua 9 kunci selalu ada (syarat keys().hasOnly di rules)', () => {
-  const s = normalizeQuizSettings({ questionCount: 5 });
+test('settings: semua kunci selalu ada (syarat keys().hasOnly di rules)', () => {
+  const s = normalizeQuizSettings({ timeLimitMinutes: 15 });
   assert.deepEqual(Object.keys(s).sort(), Object.keys(QUIZ_SETTINGS_DEFAULTS).sort());
-  assert.equal(s.questionCount, 5);
-  assert.equal(s.timeLimitMinutes, 0);
+  assert.equal(s.timeLimitMinutes, 15);
+  assert.equal(s.passingScorePercent, 70);
+});
+
+test('CP2: questionCount dihapus — jumlah soal = panjang questionIds', () => {
+  // Field lama tidak lagi menjadi bagian settings dan harus dibuang, bukan
+  // diteruskan ke rules (yang kini menolak key itu lewat hasOnly).
+  const s = normalizeQuizSettings({ questionCount: 5, timeLimitMinutes: 5 });
+  assert.equal('questionCount' in s, false);
+  assert.equal(Object.keys(s).includes('questionCount'), false);
+  // Kunci `questionCount` juga tidak boleh muncul di default.
+  assert.equal(Object.keys(QUIZ_SETTINGS_DEFAULTS).includes('questionCount'), false);
 });
 
 test('settings: nilai di luar rentang ditolak', () => {
-  assert.throws(() => normalizeQuizSettings({ questionCount: 0 }), /Jumlah soal/);
-  assert.throws(() => normalizeQuizSettings({ questionCount: 51 }), /Jumlah soal/);
   assert.throws(() => normalizeQuizSettings({ timeLimitMinutes: 481 }), /Batas waktu/);
   assert.throws(() => normalizeQuizSettings({ passingScorePercent: 101 }), /Nilai kelulusan/);
   assert.throws(() => normalizeQuizSettings({ maxAttempts: 0 }), /Batas percobaan/);
   assert.throws(() => normalizeQuizSettings({ maxAttempts: 21 }), /Batas percobaan/);
-  assert.throws(() => normalizeQuizSettings({ questionCount: 1.5 }), /Jumlah soal/);
+  assert.throws(() => normalizeQuizSettings({ timeLimitMinutes: 1.5 }), /Batas waktu/);
 });
 
 test('settings: tipe salah ditolak (bool wajib boolean, mode dari enum)', () => {
@@ -173,12 +182,10 @@ test('settings: tipe salah ditolak (bool wajib boolean, mode dari enum)', () => 
 
 test('settings: batas atas yang sah diterima, dan showAnswerMode enum utuh', () => {
   const s = normalizeQuizSettings({
-    questionCount: 50,
     timeLimitMinutes: 480,
     passingScorePercent: 0,
     maxAttempts: 20
   });
-  assert.equal(s.questionCount, 50);
   assert.equal(s.timeLimitMinutes, 480);
   assert.equal(s.passingScorePercent, 0);
   assert.equal(s.maxAttempts, 20);

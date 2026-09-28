@@ -444,12 +444,12 @@ export function buildProgressSeries({
 }
 
 export const ACHIEVEMENT_DEFINITIONS = [
-  { key: 'first_topic', icon: '🗺️', title: 'Mulai roadmap', description: 'Buat satu topik pertama di ruang belajar.', goal: 1 },
-  { key: 'first_note', icon: '📝', title: 'Catatan pertama', description: 'Simpan satu catatan milikmu.', goal: 1 },
-  { key: 'first_resource', icon: '🔗', title: 'Sumber pertama', description: 'Tambahkan satu resource ke roadmap.', goal: 1 },
-  { key: 'shared_material', icon: '🤝', title: 'Belajar berdua', description: 'Bagikan satu catatan atau resource.', goal: 1 },
-  { key: 'understood_notes', icon: '🧠', title: 'Paham lima catatan', description: 'Tandai lima catatan sebagai dipahami.', goal: 5 },
-  { key: 'completed_material', icon: '🏁', title: 'Lantai satu', description: 'Selesaikan lima materi di ruang ini.', goal: 5 }
+  { key: 'first_topic', icon: 'roadmap', title: 'Mulai roadmap', description: 'Buat satu topik pertama di ruang belajar.', goal: 1 },
+  { key: 'first_note', icon: 'notes', title: 'Catatan pertama', description: 'Simpan satu catatan milikmu.', goal: 1 },
+  { key: 'first_resource', icon: 'link', title: 'Sumber pertama', description: 'Tambahkan satu resource ke roadmap.', goal: 1 },
+  { key: 'shared_material', icon: 'users', title: 'Belajar berdua', description: 'Bagikan satu catatan atau resource.', goal: 1 },
+  { key: 'understood_notes', icon: 'mind', title: 'Paham lima catatan', description: 'Tandai lima catatan sebagai dipahami.', goal: 5 },
+  { key: 'completed_material', icon: 'flag', title: 'Lantai satu', description: 'Selesaikan lima materi di ruang ini.', goal: 5 }
 ];
 
 export function buildAchievements(snapshot, { partnerPresent = false } = {}) {

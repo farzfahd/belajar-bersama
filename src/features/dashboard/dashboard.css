@@ -1,41 +1,24 @@
 /* ============================================================
-   Dashboard — token & komponen lokal (Phase 1)
+   Komponen bersama — memakai TOKEN GLOBAL (lihat :root di atas).
    ------------------------------------------------------------
-   SEMUA selector di file ini di-scope di bawah `.dashboard-root`,
-   jadi tidak mungkin bocor ke halaman lain. Token global
-   (tailwind.config.js / index.css) TIDAK diubah di fase ini.
-
-   Hanya 4 token warna yang ditulis eksplisit per tema (sesuai
-   spesifikasi); sisanya diturunkan dengan color-mix agar hierarki
-   teks tetap konsisten tanpa menambah token baru.
+   F4: token lokal dihapus. Dashboard sekarang memakai skema yang
+   sama dengan halaman lain, bukan warna override sendiri.
    ============================================================ */
-
 .dashboard-root {
-  --db-bg: #0a0e14;
-  --db-text: #e6e9ef;
-  --db-accent: #5b6ef5;
-  --db-border: #232838;
-
-  /* Turunan */
-  --db-surface: color-mix(in srgb, var(--db-text) 3%, var(--db-bg));
-  --db-dim: color-mix(in srgb, var(--db-text) 72%, var(--db-bg));
-  --db-dimmer: color-mix(in srgb, var(--db-text) 50%, var(--db-bg));
-  --db-glow: 0 0 0 1px var(--db-accent), 0 0 12px rgba(91, 110, 245, 0.25);
+  /* Netral: semua nilai diambil dari token global. */
+  --db-dim: var(--text-dim);
+  --db-dimmer: var(--text-dimmer);
+  --db-glow: var(--glow);
 }
 
-:root[data-theme='light'] .dashboard-root {
-  --db-bg: #f7f8fb;
-  --db-text: #12151c;
-  --db-accent: #5b6ef5;
-  --db-border: #d7dbe4;
-}
-
-/* ---------- Panel / card: border sebagai struktur utama ---------- */
+/* ---------- Panel / card ----------
+   F4: background = --bg (menyatu dengan halaman), dipisah HANYA garis
+   tipis. Bukan blok warna lebih terang yang kesan "widget mengambang". */
 .db-card {
-  background: var(--db-surface);
-  border: 1px solid var(--db-border);
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 /* Glow hanya saat interaksi, tidak pernah permanen. */
@@ -68,7 +51,7 @@
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0.01em;
-  color: var(--db-text);
+  color: var(--text);
 }
 /* Judul halaman: tetap serif (font produksi), dikecilkan agar tenang. */
 .db-title {
@@ -77,7 +60,7 @@
   font-weight: 500;
   line-height: 1.25;
   letter-spacing: -0.01em;
-  color: var(--db-text);
+  color: var(--text);
 }
 /* Angka statistik: tabular agar angka sejajar dalam kolom. */
 .db-num {
@@ -87,7 +70,7 @@
   line-height: 1;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
-  color: var(--db-text);
+  color: var(--text);
 }
 
 /* ---------- Baris daftar ---------- */
@@ -98,7 +81,7 @@
   gap: 12px;
   min-height: 44px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--db-border);
+  border-bottom: 1px solid var(--border);
   transition: box-shadow 0.15s ease;
 }
 .db-row:last-child { border-bottom: 0; }
@@ -110,7 +93,7 @@
   font-size: 13.5px;
   font-weight: 500;
   line-height: 1.45;
-  color: var(--db-text);
+  color: var(--text);
 }
 .db-row-meta {
   display: block;
@@ -127,7 +110,7 @@
   gap: 6px;
   min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--db-border);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
   color: var(--db-dim);
@@ -138,8 +121,8 @@
 }
 .db-action:hover,
 .db-action:focus-visible {
-  color: var(--db-accent);
-  border-color: var(--db-accent);
+  color: var(--accent);
+  border-color: var(--accent);
   box-shadow: var(--db-glow);
 }
 
@@ -149,7 +132,7 @@
   align-items: center;
   gap: 8px;
   padding: 4px 12px 4px 4px;
-  border: 1px solid var(--db-border);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
 }
@@ -160,7 +143,7 @@
   width: 100%;
   overflow: hidden;
   border-radius: 2px;
-  background: var(--db-border);
+  background: var(--border);
 }
 .db-progress-fill {
   height: 100%;
@@ -168,25 +151,23 @@
   transition: width 0.5s ease-out;
 }
 
-/* ---------- Marka empty state ---------- */
-.db-empty-mark { color: var(--db-dimmer); }
-
-/* ---------- Pemisahan section ---------- */
-.db-divider {
-  border: 0;
-  border-top: 1px solid var(--db-border);
-  margin: 0;
+/* ---------- Pemisahan section ----------
+   Bagian 3: Section Personal -> Partner -> Together bertumpuk vertikal di semua lebar.
+   Pemisah antar section: border-top 1px solid var(--border) dan padding-top 28px. */
+.db-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
 }
-/* >=1280px (xl): Personal / Partner / Together berdampingan dengan
-   separator vertikal halus. <1280px: separator horizontal di atas. */
-@media (min-width: 1280px) {
-  .db-sections { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .db-section {
-    padding-left: 20px;
-    padding-right: 20px;
-    border-left: 1px solid var(--db-border);
-  }
-  .db-section:first-child { padding-left: 0; border-left: 0; }
-  .db-section:last-child { padding-right: 0; }
-  .db-divider { display: none; }
+.db-section {
+  width: 100%;
+}
+.db-section + .db-section {
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+.db-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
 }
