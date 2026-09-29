@@ -20,6 +20,7 @@ import {
   formatDuration,
   gradeAnswerFor,
   indexSnapshot,
+  isV3Attempt,
   remainingSeconds
 } from '../utils/attemptEngine';
 import QuestionAttemptForm from './QuestionAttemptForm';
@@ -30,9 +31,16 @@ import { toErrorMessage } from '../../../shared/utils/errors';
 // Alur: attempt dibuat otomatis saat halaman dibuka, dan saat itu SELURUH isi
 // soal disalin ke `questionSnapshot`. Setelah itu halaman ini TIDAK PERNAH
 // membaca Question Bank lagi untuk menentukan soal yang sedang dikerjakan:
-// render, penilaian, dan submit semuanya memakai `attempt.questionSnapshot`.
-// Efeknya: walaupun soalnya diubah/dihapus di Question Bank setelah attempt
-// dimulai, attempt ini tetap menampilkan dan menilai versi yang sama.
+// render dan submit semuanya memakai `attempt.questionSnapshot`. Efeknya:
+// walaupun soalnya diubah/dihapus di Question Bank setelah attempt dimulai,
+// attempt ini tetap menampilkan versi yang sama.
+//
+// Dua jalur penilaian, sesuai versi attempt:
+//   v3 (baru) — snapshot tanpa kunci, jadi halaman ini tidak pernah menilai.
+//               Entri jawaban hanya `{questionId, userAnswer}` dan nilainya
+//               dihitung server dari dokumen kunci privat.
+//   v2 (lama) — snapshot menyalin kunci, jadi indikator benar/salah di layar
+//               masih bisa dihitung di sini seperti sebelumnya.
 //
 // Pengiriman jawaban dilindungi dialog: jawaban yang kosong didaftarkan lebih
 // dulu, dan perpindahan ke halaman hasil HANYA terjadi setelah `submitAttempt`
@@ -106,9 +114,20 @@ export default function QuizAttemptPage() {
         const current = prev[index];
         if (!current) return prev;
         const updated = [...prev];
-        // Nilai ulang entri ini dengan kunci jawaban dari SNAPSHOT — bukan
-        // dari Question Bank — supaya indikator benar/salah tidak ikut berubah
-        // kalau soalnya diedit di bank soal setelah attempt dimulai.
+        if (isV3Attempt(attempt)) {
+          // Attempt v3: entri jawaban HANYA boleh memuat `questionId` dan
+          // `userAnswer` (`ownerAnswerEntryOk` di rules memakai `hasOnly`), dan
+          // snapshot-nya tidak memuat kunci sama sekali. Jadi di sini TIDAK ADA
+          // penilaian: menghitungnya di client berarti dua kebocoran sekaligus —
+          // field nilai ditolak rules, dan `isCorrect` yang salah dihitung akan
+          // muncul di layar peserta sebagai "salah" padahal belum dinilai.
+          updated[index] = { questionId: current.questionId, userAnswer: next ?? null };
+          return updated;
+        }
+        // Attempt v2 (lama): nilai ulang entri ini dengan kunci jawaban dari
+        // SNAPSHOT — bukan dari Question Bank — supaya indikator benar/salah
+        // tidak ikut berubah kalau soalnya diedit di bank soal setelah attempt
+        // dimulai.
         updated[index] = {
           ...current,
           ...gradeAnswerFor(current.questionId, snapshotById.get(current.questionId), next)
@@ -116,7 +135,7 @@ export default function QuizAttemptPage() {
         return updated;
       });
     },
-    [index, snapshotById]
+    [index, snapshotById, attempt]
   );
 
   // Autosave jawaban setiap kali soal berpindah.

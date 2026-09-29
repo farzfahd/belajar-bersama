@@ -1,6 +1,7 @@
-import test from 'node:test';
+import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assertHasDistractor,
   buildTypeFields,
   normalizeSubQuestions,
   SUB_QUESTION_TYPES,
@@ -122,6 +123,93 @@ test('code: hanya menyimpan teks, tidak ada evaluator', () => {
 
 test('tipe tak dikenal ditolak', () => {
   assert.throws(() => buildTypeFields('mystery', {}), /tidak dikenal/);
+});
+
+// ---------- PGK: minimal satu pengecoh (K < N) ----------
+// Semua opsi ditandai benar membuat "pilih semua" jadi satu-satunya jawaban
+// sempurna, jadi nilai 1,0 tidak lagi membedakan memahami dari menebak.
+describe('PGK harus punya minimal satu pengecoh (K < N)', () => {
+  it('K=1 dari N=2 sah (paling sering dipakai)', () => {
+    assert.deepEqual(buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [0] }), {
+      options: ['A', 'B'],
+      correctIndices: [0]
+    });
+  });
+
+  it('K=N-1 sah (tepat satu pengecoh)', () => {
+    for (const opsi of [
+      ['A', 'B', 'C'],
+      ['A', 'B', 'C', 'D'],
+      ['A', 'B', 'C', 'D', 'E']
+    ]) {
+      const semua = opsi.map((_, i) => i);
+      const fields = buildTypeFields('multiple', { options: opsi, correctIndices: semua.slice(0, -1) });
+      assert.equal(fields.correctIndices.length, opsi.length - 1);
+    }
+  });
+
+  it('K=N ditolak dengan pesan untuk penulis, bukan bahasa rumus', () => {
+    const pesan = /minimal satu opsi yang salah sebagai pengecoh/;
+    assert.throws(() => buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [0, 1] }), pesan);
+    assert.throws(
+      () => buildTypeFields('multiple', { options: ['A', 'B', 'C'], correctIndices: [0, 1, 2] }),
+      pesan
+    );
+    assert.throws(
+      () => buildTypeFields('multiple', { options: ['A', 'B', 'C', 'D'], correctIndices: [0, 1, 2, 3] }),
+      pesan
+    );
+  });
+
+  it('pesan tidak memakai istilah teknis N-K', () => {
+    try {
+      buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [0, 1] });
+      assert.fail('harus lempar error');
+    } catch (e) {
+      assert.doesNotMatch(e.message, /N-K/, 'penulis soal tidak boleh melihat rumus');
+      assert.doesNotMatch(e.message, /distractor/i, 'pakai bahasa sehari-hari, bukan istilah teknis');
+    }
+  });
+
+  it('duplikat correctIndices tetap dijahit lebih dulu, lalu dinilai K < N', () => {
+    // Dua baris memilih opsi yang sama -> setelah dijahit K=1 dari N=2, jadi sah.
+    assert.deepEqual(buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [1, 1] }).correctIndices, [
+      1
+    ]);
+    // Tapi duplikat yang mencakup semua opsi tetap ditolak lewat aturan pengecoh.
+    assert.throws(
+      () => buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [0, 0, 1] }),
+      /pengecoh/
+    );
+  });
+
+  it('kunci kosong & di luar rentang tetap dapat pesannya masing-masing', () => {
+    assert.throws(() => buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [] }), /kunci jawaban/);
+    assert.throws(
+      () => buildTypeFields('multiple', { options: ['A', 'B'], correctIndices: [0, 5] }),
+      /kunci jawaban/
+    );
+    // Opsi kosong lebih dulu, sebelum aturan pengecoh: satu opsi kosong saja
+    // belum jadi "semua opsi adalah kunci".
+    assert.throws(() => buildTypeFields('multiple', { options: ['A', ''], correctIndices: [0] }), /kosong/);
+  });
+
+  it('sub-soal studi kasus PGK mengikuti aturan yang sama', () => {
+    assert.throws(
+      () => normalizeSubQuestions([{ type: 'multiple', options: ['A', 'B'], correctIndices: [0, 1] }]),
+      /pengecoh/
+    );
+    const sah = normalizeSubQuestions([{ type: 'multiple', options: ['A', 'B'], correctIndices: [0] }]);
+    assert.deepEqual(sah[0].correctIndices, [0]);
+  });
+
+  it('assertHasDistractor dilewati saat opsi tidak dikirim (tidak bisa dinilai)', () => {
+    // Dipakai `updateQuestion` yang bisa menerima update sebagian field.
+    assert.doesNotThrow(() => assertHasDistractor([0, 1, 2], undefined));
+    assert.doesNotThrow(() => assertHasDistractor(undefined, ['A', 'B']));
+    assert.throws(() => assertHasDistractor([0, 1], ['A', 'B']), /pengecoh/);
+    assert.doesNotThrow(() => assertHasDistractor([0], ['A', 'B']));
+  });
 });
 
 // ---------- case_study: satu tingkat ----------

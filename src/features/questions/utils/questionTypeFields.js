@@ -8,7 +8,7 @@
 // Tidak ada evaluator / sandbox / eksekusi kode di sini: tipe `code` hanya
 // menyimpan teks, penilaiannya manual.
 
-import { isValidPairDraft } from './matchingPairs.js';
+import { findDuplicateText, isValidPairDraft } from './matchingPairs.js';
 
 export const OPTION_MIN = 2;
 export const OPTION_MAX = 20;
@@ -59,12 +59,41 @@ function requireAnswerIndex(raw, options) {
   return answerIndex;
 }
 
+// Pesan untuk penulis soal. Sengaja tidak memakai bahasa rumus ("N-K harus
+// > 0"): yang perlu diketahui penulis adalah apa yang harus diperbaiki, bukan
+// bentuk persyaratannya. Diekspor supaya author UI (modal) dan builder
+// menampilkan kalimat yang sama.
+export const PGK_DISTRACTOR_MESSAGE =
+  'PGK harus memiliki minimal satu opsi yang salah sebagai pengecoh. Jangan tandai semua opsi sebagai jawaban benar.';
+
+/**
+ * Menolak PGK yang semua opsinya adalah kunci (K = N).
+ *
+ * Alasannya kualitas soal, bukan keamanan: dengan K = N, satu-satunya jawaban
+ * sempurna adalah "pilih semua", jadi nilai 1,0 tidak lagi membedakan memahami
+ * dari menebak. Tidak ada opsi yang bisa jadi pengecoh, dan kredit parsial
+ * (gamma 0,75) juga kehilangan maknanya.
+ *
+ * `grading.js` SENGAJA TIDAK diubah: guard `N - K > 0` di sana tetap dipertahankan
+ * supaya soal lama yang sudah terlanjur tersimpan (K = N) tetap bisa dibaca dan
+ * dinilai tanpa crash. Aturan ini hanya berlaku di jalur authoring/save.
+ */
+export function assertHasDistractor(correctIndices, options) {
+  if (!Array.isArray(correctIndices) || !Array.isArray(options)) return;
+  if (correctIndices.length >= options.length) {
+    throw new Error(PGK_DISTRACTOR_MESSAGE);
+  }
+}
+
 // Kunci jawaban multi-opsi: unik, dan seluruhnya menunjuk opsi yang ada.
 function requireCorrectIndices(raw, options) {
   const indices = [...new Set(list(raw).map(Number))].sort((a, b) => a - b);
   if (indices.length === 0 || indices.some((idx) => !Number.isInteger(idx) || idx < 0 || idx >= options.length)) {
     throw new Error('Pilih setidaknya satu kunci jawaban yang valid.');
   }
+  // Setelah dicek valid, baru aturan pengecoh: supaya soal tanpa kunci sama
+  // sekali tetap dapat pesan "pilih jawaban benar", bukan pesan pengecoh.
+  assertHasDistractor(indices, options);
   return indices;
 }
 
@@ -76,10 +105,48 @@ function requireAcceptedAnswers(raw) {
   return accepted;
 }
 
-function requirePairs(raw) {
-  const pairs = list(raw)
+/**
+ * Menolak pasangan dengan teks kiri atau kanan yang kembar.
+ *
+ * Aturan ini berlaku untuk SETIAP soal menjodohkan, termasuk sub-soal studi
+ * kasus. Alasannya bukan sekadar kerapian:
+ *   - `pairs` adalah kunci jawaban yang dibaca `grading.js` sebagai peta
+ *     `{ left: right }`. Kiri kembar membuat dua baris menunjuk satu kunci yang
+ *     sama, jadi object jawaban meng-collapse dan soal tidak pernah bisa
+ *     bernilai penuh.
+ *   - Kanan kembar membuat kunci ambigu: dua opsi berbeda menerima teks yang
+ *     sama, jadi "mengapa jawaban saya salah" tidak punya jawaban.
+ *
+ * Yang TIDAK dilakukan: diam-diam membuang pasangan kembar atau menimpanya ke
+ * nilai pertama. Melempar error membuat penulis melihat dan memperbaiki baris
+ * yang salah, dan tidak pernah ada kunci malformed yang tersimpan lalu
+ * diharapkan "diperbaiki" saat penilaian.
+ *
+ * Hanya pasangan dengan kedua sisi terisi yang diperiksa: baris yang belum
+ * tersambung memang dibuang lebih dulu oleh `requirePairs` dan tidak pernah jadi
+ * bagian answer key.
+ */
+export function assertUniquePairs(rawPairs) {
+  const pairs = list(rawPairs)
     .map((p) => ({ left: String(p?.left ?? '').trim(), right: String(p?.right ?? '').trim() }))
     .filter((p) => p.left && p.right);
+  const dupLeft = findDuplicateText(pairs.map((p) => p.left));
+  if (dupLeft) {
+    throw new Error(
+      `Soal menjodohkan tidak boleh memakai item kiri "${dupLeft}" lebih dari sekali. Setiap item kiri harus unik.`
+    );
+  }
+  const dupRight = findDuplicateText(pairs.map((p) => p.right));
+  if (dupRight) {
+    throw new Error(
+      `Soal menjodohkan tidak boleh memakai item kanan "${dupRight}" lebih dari sekali. Setiap item kanan harus unik.`
+    );
+  }
+  return pairs;
+}
+
+function requirePairs(raw) {
+  const pairs = assertUniquePairs(raw);
   if (pairs.length < 2) {
     throw new Error('Soal menjodohkan memerlukan setidaknya 2 pasangan.');
   }

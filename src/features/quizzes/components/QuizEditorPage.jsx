@@ -19,7 +19,7 @@ import QuestionReportModal from '../../questions/components/QuestionReportModal'
 import { useQuiz, useAttempts } from '../hooks/useQuizzes';
 import { deleteQuiz, updateQuiz, updateQuizQuestionIds } from '../services/quizService';
 import { normalizeQuizSettings } from '../utils/quizSettings';
-import { ATTEMPT_STATUS, canStartNewAttempt, findInProgress } from '../utils/attemptEngine';
+import { ATTEMPT_STATUS, attemptScoreLabel, canStartNewAttempt, findInProgress } from '../utils/attemptEngine';
 import {
   appendQuestionIds,
   buildEditorCards,
@@ -232,12 +232,17 @@ const [reportTarget, setReportTarget] = useState(null);
 
   // Helper untuk remove / move: array yang dikembalikan SAMA berarti gerakan
   // tidak mungkin (kepala, ekor, satu soal) -> write dibatalkan.
+  //
+  // `questions` ikut diteruskan supaya `updateQuizQuestionIds` bisa menulis
+  // manifest `questionKeyRevisions`: nomor revisi kunci tiap soal yang masuk ke
+  // kuis. Tanpa itu, attempt yang dimulai belakangan akan terkunci ke kunci
+  // terbaru walau kuis ini sengaja disusun dengan kunci versi lama.
   const mutateIds = async (nextIds, message) => {
     if (!quiz || locked) return;
     if (nextIds === quiz.questionIds) return;
     setPending(true);
     try {
-      await updateQuizQuestionIds(spaceId, quiz.id, nextIds);
+      await updateQuizQuestionIds(spaceId, quiz.id, nextIds, questions);
       if (message) toast.success(message);
     } catch (e) {
       toast.error(toErrorMessage(e, 'Gagal mengubah daftar soal.'));
@@ -304,6 +309,10 @@ const [reportTarget, setReportTarget] = useState(null);
     if (!quiz) return;
     setPending(true);
     try {
+      // `questions` sengaja TIDAK diteruskan di sini: soalnya baru saja dibuat,
+      // jadi belum tentu ada di daftar `useQuestions`. `updateQuizQuestionIds`
+      // membacanya sendiri kalau memang belum ada — itulah jalur yang membuat
+      // manifest kunci entry soal baru ini langsung terisi.
       await updateQuizQuestionIds(spaceId, quiz.id, appendQuestionIds(quiz.questionIds, [realId]));
       toast.success('Soal ditambahkan ke kuis.');
     } catch (e) {
@@ -379,7 +388,7 @@ const [reportTarget, setReportTarget] = useState(null);
     }
     setPending(true);
     try {
-      await updateQuizQuestionIds(spaceId, quiz.id, next);
+      await updateQuizQuestionIds(spaceId, quiz.id, next, questions);
       toast.success(`${next.length - quiz.questionIds.length} soal ditambahkan.`);
     } catch (e) {
       toast.error(toErrorMessage(e, 'Gagal menambah soal.'));
@@ -555,7 +564,7 @@ const [reportTarget, setReportTarget] = useState(null);
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block text-[14px] text-ink">
-                      {a.status === ATTEMPT_STATUS.inProgress ? 'Sedang berjalan' : `${a.scorePercent}%`}
+                      {a.status === ATTEMPT_STATUS.inProgress ? 'Sedang berjalan' : attemptScoreLabel(a)}
                     </span>
                     <span className="block text-[12px] text-dimmer">{timeAgo(a.startedAt)}</span>
                   </span>
@@ -565,7 +574,8 @@ const [reportTarget, setReportTarget] = useState(null);
                       tone={
                         a.status === ATTEMPT_STATUS.inProgress
                           ? 'accent'
-                          : a.status === ATTEMPT_STATUS.pendingManualGrade
+                          : a.status === ATTEMPT_STATUS.pendingManualGrade ||
+                              a.status === ATTEMPT_STATUS.pendingGrading
                             ? 'warn'
                             : 'dim'
                       }
@@ -574,9 +584,11 @@ const [reportTarget, setReportTarget] = useState(null);
                         ? 'Berjalan'
                         : a.status === ATTEMPT_STATUS.pendingManualGrade
                           ? 'Menunggu nilai'
-                          : a.status === ATTEMPT_STATUS.graded
-                            ? 'Dinilai'
-                            : 'Selesai'}
+                          : a.status === ATTEMPT_STATUS.pendingGrading
+                            ? 'Menunggu penilaian'
+                            : a.status === ATTEMPT_STATUS.graded
+                              ? 'Dinilai'
+                              : 'Selesai'}
                     </Badge>
                   </span>
                 </button>

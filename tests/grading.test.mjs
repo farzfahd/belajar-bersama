@@ -73,6 +73,28 @@ test('grade PGK — select-all = 0.25 flat (C8)', () => {
   assert.equal(gradeQuestionAnswer(q108, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).fraction, 0.25);
 });
 
+// Legacy: soal PGK yang terlanjur tersimpan dengan K = N (semua opsi adalah
+// kunci) tidak dimigrasikan. `grading.js` SENGAJA tidak diubah, jadi soal seperti
+// ini harus tetap bisa dinilai tanpa NaN/Infinity — Aturan K < N hanya berlaku di
+// jalur authoring/save. Tes ini penjaga: kalau suatu saat guard di `grading.js`
+// ikut diubah, tes ini gagal.
+test('LEGACY: PGK K=N (tanpa pengecoh) tetap bisa dinilai, tidak crash', () => {
+  const legacy = { type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [0, 1, 2], points: 10 };
+  for (const jawaban of [[0, 1, 2], [0], [0, 1], [], null, undefined]) {
+    const hasil = gradeQuestionAnswer(legacy, jawaban);
+    assert.equal(Number.isFinite(hasil.fraction), true, `fraction harus angka: ${JSON.stringify(jawaban)}`);
+    assert.equal(Number.isFinite(hasil.pointsEarned), true, `poin harus angka: ${JSON.stringify(jawaban)}`);
+    assert.equal(hasil.fraction >= 0 && hasil.fraction <= 1, true);
+  }
+  // Select-all tetap 1,0 (memang tidak ada pengecoh), select sebagian tetap
+  // dapat kredit parsial, kosong tetap 0.
+  assert.equal(gradeQuestionAnswer(legacy, [0, 1, 2]).fraction, 1);
+  const sebagian = gradeQuestionAnswer(legacy, [0, 1]);
+  assert.equal(sebagian.isCorrect, false);
+  assert.equal(sebagian.fraction > 0 && sebagian.fraction < 1, true, 'masih dapat kredit parsial');
+  assert.equal(gradeQuestionAnswer(legacy, []).pointsEarned, 0);
+});
+
 test('grade PGK — nilai vektor riset §12 (round2)', () => {
   const make = (options, correctIndices, points) => ({ type: 'multiple', options, correctIndices, points });
   // (4,3): (1,0) → 1/3; (1,1) → 0.083; (2,1) → 0.167

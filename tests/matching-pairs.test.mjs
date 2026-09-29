@@ -13,6 +13,7 @@ import {
   assignedRightIndex,
   createMatchingState,
   createMatchingStateFromDraft,
+  findDuplicateText,
   isValidPairDraft,
   leftIndexUsingRight,
   matchingCompletion,
@@ -26,6 +27,8 @@ import {
   shuffleWithSeed,
   unassignPair
 } from '../src/features/questions/utils/matchingPairs.js';
+import { assertUniquePairs, buildTypeFields, normalizeSubQuestions } from '../src/features/questions/utils/questionTypeFields.js';
+import { gradeQuestionAnswer } from '../src/features/questions/utils/grading.js';
 import { buildQuestionSnapshot } from '../src/features/quizzes/utils/attemptEngine.js';
 
 const PAIRS = [
@@ -401,3 +404,139 @@ describe('matching draft - validitas & keamanan draft', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// KEUNIKAN TEKS KIRI & KANAN (TAHAP B)
+// ---------------------------------------------------------------------------
+// `pairs` adalah answer key. Pasangan kembar tidak bisa dinilai dengan benar:
+//   A -> X / B -> X  => kunci kanan ambigu, dua opsi menerima teks yang sama
+//   A -> X / A -> Y  => kunci kiri kembar, object jawaban meng-collapse key
+// Karena itu builder, jalur simpan, dan editor semuanya menolak kembar — bukan
+// diam-diam membuang barisnya.
+describe('menjodohkan: teks kiri & kanan harus unik', () => {
+  const UNIK = [
+    { left: 'Indonesia', right: 'Jakarta' },
+    { left: 'Malaysia', right: 'Kuala Lumpur' }
+  ];
+
+  it('pasangan unik tetap diterima (tidak ada regresi)', () => {
+    assert.deepEqual(buildTypeFields('matching', { pairs: UNIK }).pairs, UNIK);
+    assert.deepEqual(assertUniquePairs(UNIK), UNIK);
+  });
+
+  it('kiri kembar ditolak dengan pesan yang menyebut teksnya', () => {
+    assert.throws(
+      () => buildTypeFields('matching', { pairs: [{ left: 'A', right: 'X' }, { left: 'A', right: 'Y' }] }),
+      /item kiri "A" lebih dari sekali/
+    );
+  });
+
+  it('kanan kembar ditolak dengan pesan yang menyebut teksnya', () => {
+    assert.throws(
+      () => buildTypeFields('matching', { pairs: [{ left: 'A', right: 'X' }, { left: 'B', right: 'X' }] }),
+      /item kanan "X" lebih dari sekali/
+    );
+  });
+
+  it('kiri & kanan kembar bercampur ditolak (pesan pertama yang muncul)', () => {
+    assert.throws(
+      () =>
+        buildTypeFields('matching', {
+          pairs: [
+            { left: 'A', right: 'X' },
+            { left: 'A', right: 'X' }
+          ]
+        }),
+      /kiri "A"/
+    );
+  });
+
+  it('kembar setelah di-trim tetap dianggap kembar', () => {
+    assert.throws(
+      () => buildTypeFields('matching', { pairs: [{ left: ' A ', right: 'X' }, { left: 'A', right: 'Y' }] }),
+      /kiri "A"/
+    );
+  });
+
+  it('jumlah pasangan < 2 tetap dapat pesan lamanya, bukan pesan duplikat', () => {
+    assert.throws(() => buildTypeFields('matching', { pairs: [{ left: 'a', right: 'b' }] }), /2 pasangan/);
+    assert.throws(() => buildTypeFields('matching', { pairs: [] }), /2 pasangan/);
+  });
+
+  it('baris belum tersambung tidak dihitung sebagai duplikat', () => {
+    // Dua baris dengan teks kiri sama tapi baris kedua belum dipasangkan:
+    // baris itu tidak masuk answer key, jadi belum jadi error.
+    assert.deepEqual(
+      buildTypeFields('matching', {
+        pairs: [
+          { left: 'Indonesia', right: 'Jakarta' },
+          { left: 'Malaysia', right: 'Kuala Lumpur' },
+          { left: 'Indonesia', right: '' }
+        ]
+      }).pairs,
+      UNIK
+    );
+  });
+
+  it('sub-soal studi kasus mengikuti aturan yang sama', () => {
+    assert.throws(
+      () => normalizeSubQuestions([{ type: 'matching', pairs: [{ left: 'A', right: 'X' }, { left: 'A', right: 'Y' }] }]),
+      /item kiri "A"/
+    );
+    assert.throws(
+      () => normalizeSubQuestions([{ type: 'matching', pairs: [{ left: 'A', right: 'X' }, { left: 'B', right: 'X' }] }]),
+      /item kanan "X"/
+    );
+    const sah = normalizeSubQuestions([{ type: 'matching', pairs: UNIK }]);
+    assert.equal(sah.length, 1);
+  });
+
+  it('pairDraft yang ada tidak mengubah aturan uniqueness answer key', () => {
+    // Draft boleh berisi baris kembar (kebetulan diketik), tapi `pairs`-nya
+    // sendiri harus tetap unik supaya kunci jawaban bisa dinilai.
+    const fields = buildTypeFields('matching', {
+      pairs: UNIK,
+      pairDraft: { lefts: ['Indonesia', 'Indonesia'], rights: ['Jakarta', 'Kuala Lumpur'], assigned: [0, 1] }
+    });
+    assert.deepEqual(fields.pairs, UNIK);
+    assert.equal(fields.pairDraft.lefts.length, 2, 'draft tetap utuh, tidak ikut dibuang');
+  });
+
+  it('editor persistensi tetap utuh untuk pasangan unik (reload)', () => {
+    const state = createMatchingState(UNIK);
+    const draft = serializePairDraft(state);
+    const restored = createMatchingStateFromDraft(draft);
+    assert.deepEqual(serializePairs(restored), UNIK);
+    assert.equal(findDuplicateText(restored.lefts), null);
+    assert.equal(findDuplicateText(restored.rights), null);
+  });
+
+  it('tidak ada kunci malformed yang lolos ke nilai: nilai penuh tetap mungkin', () => {
+    // Karena kembar ditolak di authoring, nilai penuh jadi bisa dicapai.
+    const soal = { type: 'matching', pairs: UNIK, points: 10 };
+    assert.equal(gradeQuestionAnswer(soal, { Indonesia: 'Jakarta', Malaysia: 'Kuala Lumpur' }).fraction, 1);
+  });
+});
+
+describe('findDuplicateText', () => {
+  it('mengembalikan teks kembar pertama, atau null', () => {
+    assert.equal(findDuplicateText(['a', 'b', 'c']), null);
+    assert.equal(findDuplicateText(['a', 'b', 'a']), 'a');
+    assert.equal(findDuplicateText(['x', 'y', 'y', 'x']), 'y');
+  });
+
+  it('baris kosong bukan duplikat (tempat mengetik baru)', () => {
+    assert.equal(findDuplicateText(['', '', '']), null);
+    assert.equal(findDuplicateText(['  ', 'a', '  ']), null);
+    assert.equal(findDuplicateText(['a', '', 'a']), 'a');
+  });
+
+  it('perbandingan memakai teks yang sudah di-trim', () => {
+    assert.equal(findDuplicateText(['A', ' A ']), 'A');
+  });
+
+  it('aman untuk input bukan array', () => {
+    assert.equal(findDuplicateText(undefined), null);
+    assert.equal(findDuplicateText('a'), null);
+  });
+});

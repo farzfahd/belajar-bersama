@@ -10,15 +10,26 @@
 // Modul ini murni (tanpa React/Firestore) supaya bisa diuji dengan `node --test`.
 // Ekstensi `.js` dipakai karena diimpor langsung oleh `node --test`.
 import { gradeQuestionAnswer } from '../../questions/utils/grading.js';
+import {
+  buildSnapshotV3Entry,
+  isLegacySnapshotEntry
+} from './snapshotV3.js';
 
 // Status lifecycle attempt. `in_progress` = masih dikerjakan; `completed` =
 // selesai & semua soal ter-nilai otomatis; `pending_manual_grade` = selesai
 // tapi masih ada soal uraian/kode yang menunggu penilaian; `graded` = sudah
 // di-finalisasi pemilik setelah nilai manual tersedia.
+//
+// `pendingGrading` KHUSUS attempt v3: jawaban sudah diserahkan (`submittedAt`
+// terisi) tapi belum ada nilai sama sekali, karena penilaiannya dilakukan
+// server (M6) dari dokumen kunci privat. Client tidak boleh memberi nilai
+// sendiri di status ini — `attemptOwnerStatusOk` di `firestore.rules` hanya
+// menerima `in_progress` dan `pending_grading` dari peserta.
 export const ATTEMPT_STATUS = {
   inProgress: 'in_progress',
   completed: 'completed',
   pendingManualGrade: 'pending_manual_grade',
+  pendingGrading: 'pending_grading',
   graded: 'graded'
 };
 
@@ -26,8 +37,8 @@ export const ATTEMPT_STATUSES = Object.values(ATTEMPT_STATUS);
 
 /**
  * Tipe khusus untuk entri snapshot yang SOALNYA TIDAK ADA saat attempt
- * dimulai (sudah dihapus, atau private sehingga tidak terlihat oleh
- * Dosennyah yang memulai attempt).
+ * dimulai (sudah dihapus, atau private sehingga tidak terlihat oleh peserta
+ * yang memulai attempt).
  *
  * Ini kasus tepi, bukan kondisi normal: begitu attempt punya snapshot lengkap,
  * attempt lama tetap bisa dirender walau soal aslinya kemudian dihapus. Tipe
@@ -220,7 +231,7 @@ export function buildSnapshotEntry(question, questionId) {
  * dihapus; `randomizeQuestionOrder` hanya mengacak URUTAN, bukan mengambil
  * sebagian), jadi urutan soal pada attempt sama dengan urutan di kuis.
  *
- * `questionById` hanya dibutuhkan DI SINA — saat attempt dimulai. Setelah
+ * `questionById` hanya dibutuhkan di sini — saat attempt dimulai. Setelah
  * fungsi ini dipanggil, pemanggil tidak boleh bergantung pada live questions
  * lagi.
  */
@@ -541,4 +552,282 @@ export function findInProgress(attempts, uid) {
       (a) => a?.status === ATTEMPT_STATUS.inProgress && (!uid || a.uid === uid)
     ) || null
   );
+}
+
+// ============================================================================
+// ATTEMPT VERSI 3 — snapshot tanpa kunci, penilaian di server.
+// ============================================================================
+//
+// PERBEDAAN DENGAN v2 (yang TETAP ADA dan tidak diubah):
+//   v2 → snapshot menyalin kunci; `answers` punya `isCorrect`/`pointsEarned`;
+//        skor ditulis client; status `completed`/`pending_manual_grade`.
+//   v3 → snapshot hanya material publik + `keyRevision`; `answers` HANYA
+//        `{questionId, userAnswer}`; skor TIDAK ADA di dokumen sampai server
+//        menuliskannya; status `pending_grading` setelah submit.
+//
+// Semua fungsi v2 di atas dibiarkan utuh karena attempt v2 yang sudah terlanjur
+// ada di Firestore masih harus bisa dibaca, dinilai ulang, dan di-finalisasi
+// pemiliknya. Yang berubah hanya jalur PEMBUATAN attempt baru, dan `firestore.rules`
+// sudah menolak attempt v2 yang baru dibuat (create hanya menerima v3).
+//
+// Aturan main v3: client tidak pernah menulis nilai apa pun ke attempt.
+
+// ---------------------------------------------------------------------------
+// Kunci revisi: attempt harus terkunci ke SATU revisi kunci yang tetap.
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalisasi nomor revisi kunci menjadi bentuk yang diterima rules.
+ *
+ * Rules menuntut `e.keyRevision.matches('^[1-9][0-9]*$')`, yaitu string desimal
+ * tanpa nol di depan. Firestore menyimpan angka sebagai number, jadi angka 1
+ * harus jadi `'1'`, bukan `1` dan bukan `'01'`. Nilai yang tidak bisa dinormalkan
+ * (undefined, 0, negatif, `'abc'`, `1.5`) dikembalikan `null` supaya pemanggil
+ * bisa menolaknya dengan pesan yang jelas — bukan mengirim angka yang ditolak
+ * rules dengan error yang tidak explains.
+ */
+export function normalizeKeyRevision(value) {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value >= 1 ? String(value) : null;
+  }
+  if (typeof value === 'string' && /^[1-9][0-9]*$/.test(value.trim())) {
+    return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Revisi kunci yang dipakai satu soal, dalam urutan prioritas:
+ *   1. `manifest` (`quiz.questionKeyRevisions`) — dikunci saat kuis disusun.
+ *   2. `question.keyRevision` — fallback untuk kuis lama / soal yang ditambahkan
+ *      sebelum manifest ada.
+ *   3. `null` kalau keduanya tidak ada.
+ *
+ * Kenapa manifest lebih dulu: kalau kunci soal direvisi SETELAH kuis disusun,
+ * participant yang memulai attempt kemudian akan terkunci ke kunci terbaru —
+ * padahal kuis itu dimaksudkan memakai kunci versi lama. Attempt yang SUDAH
+ * berjalan tidak terpengaruh (revisinya sudah tersalin di snapshot-nya), jadi
+ * risikonya hanya untuk attempt yang dimulai belakangan.
+ */
+export function keyRevisionFor(questionId, manifest, question) {
+  const fromManifest = normalizeKeyRevision(manifest?.[questionId]);
+  if (fromManifest) return fromManifest;
+  return normalizeKeyRevision(question?.keyRevision);
+}
+
+/**
+ * Susun manifest `{questionId: revisi}` untuk disimpan di dokumen kuis.
+ *
+ * Hanya memuat soal yang benar-benar punya revisi. Soal tanpa revisi TIDAK
+ * dipetakan ke `null`: entri `null` akan dibaca sebagai "sudah dikunci ke
+ * revisi tertentu yang tidak ada", dan `keyRevisionFor` lalu diam-diam memakai
+ * fallback. `missingKeyRevisions` yang memberi tahu pemanggil soal mana yang
+ * perlu disimpan ulang lebih dulu.
+ */
+export function buildQuizKeyManifest(questionIds, questionById) {
+  const out = {};
+  for (const id of Array.isArray(questionIds) ? questionIds : []) {
+    const rev = keyRevisionFor(id, null, resolveQuestion(questionById, id));
+    if (rev) out[id] = rev;
+  }
+  return out;
+}
+
+/**
+ * Id soal pada kuis yang belum punya revisi kunci yang bisa dikunci.
+ * Kalau tidak kosong, attempt baru TIDAK boleh dimulai: server tidak akan punya
+ * dokumen kunci untuk menilai soal itu.
+ */
+export function missingKeyRevisions(questionIds, questionById) {
+  const missing = [];
+  for (const id of Array.isArray(questionIds) ? questionIds : []) {
+    const question = resolveQuestion(questionById, id);
+    // Soal yang tidak ada/terhapus tidak bisa dinilai otomatis dan tidak perlu
+    // kunci: entri snapshot-nya `unavailable` (0 poin + manual).
+    if (!question || question.available === false) continue;
+    if (!keyRevisionFor(id, null, question)) missing.push(id);
+  }
+  return missing;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot & jawaban v3
+// ---------------------------------------------------------------------------
+
+/**
+ * Susun `questionSnapshot` v3: satu entri per soal, tanpa field kunci, dengan
+ * `keyRevision` yang dikunci untuk attempt ini.
+ *
+ * Berbeda dari `buildQuestionSnapshot` (v2) di dua hal penting:
+ *   - Kunci tidak ikut. `buildSnapshotV3Entry` melempar Error kalau dokumen soal
+ *     masih menyimpan kunci inline, jadi migrasi M1 yang belum tuntas berhenti di
+ *     sini dengan pesan jelas — bukan diam-diam mengirim kunci ke peserta.
+ *   - Setiap entri mencatat revisi kuncinya, sehingga attempt lama tetap dinilai
+ *     terhadap kunci yang sama walau kuncinya sudah direvisi berkali-kali.
+ *
+ * @param {Object} quiz
+ * @param {Map|Object} questionById
+ * @param {*} seed - seed untuk pengacakan urutan (see `buildQuestionSnapshot`)
+ * @param {Object} [manifest] - `quiz.questionKeyRevisions`
+ */
+export function buildQuestionSnapshotV3(quiz, questionById, seed, manifest) {
+  const ids = Array.isArray(quiz?.questionIds) ? quiz.questionIds : [];
+  const missing = missingKeyRevisions(ids, questionById);
+  if (missing.length > 0) {
+    throw new Error(
+      `Soal ini belum punya kunci yang bisa dinilai: ${missing.join(', ')}. ` +
+        `Simpan ulang kuisnya setelah kunci soal tersedia.`
+    );
+  }
+  const ordered = quiz?.settings?.randomizeQuestionOrder ? shuffle(ids, seed) : [...ids];
+  return ordered.map((id) => {
+    const question = resolveQuestion(questionById, id);
+    return buildSnapshotV3Entry(question, id, keyRevisionFor(id, manifest, question));
+  });
+}
+
+/**
+ * Bangun array `answers` v3.
+ *
+ * Entri v3 HANYA boleh memuat `questionId` dan `userAnswer`
+ * (`ownerAnswerEntryOk` di `firestore.rules` memakai `hasOnly`, jadi satu field
+ * tambahan sekecil apa pun akan ditolak). Karena itu di sini tidak ada
+ * `isCorrect`, `pointsEarned`, `needsManualGrade`, atau `manualScore` — penilaian
+ * dan struktur nilainya milik server.
+ *
+ * `userAnswer` tidak pernah `undefined`: Firestore menolak nilai `undefined`,
+ * dan `null` berarti "belum dijawab" (yang memang keadaan awal).
+ */
+export function buildAnswersV3(questionSnapshot, userAnswers = {}) {
+  const entries = Array.isArray(questionSnapshot) ? questionSnapshot : [];
+  return entries.map((entry) => ({
+    questionId: entry?.id,
+    userAnswer: Object.prototype.hasOwnProperty.call(userAnswers, entry?.id)
+      ? (userAnswers[entry?.id] ?? null)
+      : null
+  }));
+}
+
+/**
+ * Susun entri jawaban v3 untuk Penilaian MANUAL oleh partner.
+ *
+ * `partnerAnswerEntryOk` di rules mengizinkan `questionId`, `userAnswer`,
+ * `manualScore`, `manualFeedback`, `gradedBy`, `gradedAt` — dan TIDAK ADA yang
+ * lain. Jadi entri yang bukan soal tujuan ditelanjangi lebih dulu: menyalin
+ * objek jawaban v2 apa adanya akan ikut membawa `isCorrect`/`pointsEarned` dan
+ * ditolak rules.
+ */
+export function withManualScoreV3(answers, questionId, manualScore, manualFeedback, gradedBy, gradedAt) {
+  return (Array.isArray(answers) ? answers : []).map((a) => {
+    if (a?.questionId !== questionId) {
+      return {
+        questionId: a?.questionId,
+        userAnswer: a?.userAnswer ?? null,
+        ...(a?.manualScore !== undefined && a?.manualScore !== null
+          ? {
+              manualScore: a.manualScore,
+              manualFeedback: a.manualFeedback ?? '',
+              gradedBy: a.gradedBy ?? null,
+              gradedAt: a.gradedAt ?? null
+            }
+          : {})
+      };
+    }
+    return {
+      questionId: a?.questionId,
+      userAnswer: a?.userAnswer ?? null,
+      manualScore: Math.max(0, Number(manualScore) || 0),
+      manualFeedback: String(manualFeedback ?? '').trim().slice(0, 2000),
+      gradedBy: gradedBy ?? null,
+      gradedAt: gradedAt ?? null
+    };
+  });
+}
+
+/** Status setelah jawaban v3 diserahkan: menunggu penilaian server. */
+export function resolveAttemptStatusV3() {
+  return ATTEMPT_STATUS.pendingGrading;
+}
+
+// ---------------------------------------------------------------------------
+// P2: penulis soal tidak boleh mengerjakan kuis yang memuat soal sendiri
+// ---------------------------------------------------------------------------
+
+/**
+ * Id soal pada kuis yang dibuat oleh `uid`.
+ *
+ * Ini SALINAN dari `attemptExcludesAuthor` di `firestore.rules`, yang hanya bisa
+ * memeriksa `questionIds[0..7]` (rules tidak punya loop). Fungsi ini memeriksa
+ * SEMUA soal, jadi participant yang menulis soal nomor 9 tetap diberi tahu lebih
+ * dulu — bukan baru saat rules menolak dengan error opaque.
+ */
+export function questionsAuthoredBy(uid, quiz, questionById) {
+  if (!uid) return [];
+  const ids = Array.isArray(quiz?.questionIds) ? quiz.questionIds : [];
+  return ids.filter((id) => resolveQuestion(questionById, id)?.createdBy === uid);
+}
+
+/**
+ * Pastikan `uid` tidak mengerjakan kuis yang memuat soal buatannya sendiri.
+ * Melempar Error dengan nama soal supaya pemilik tahu mana yang perlu dihapus
+ * dari kuis.
+ */
+export function assertNotAuthorOfQuizQuestions(uid, quiz, questionById) {
+  const own = questionsAuthoredBy(uid, quiz, questionById);
+  if (own.length > 0) {
+    throw new Error(
+      'Kuis ini memuat soal yang kamu buat sendiri, jadi tidak bisa kamu kerjakan. ' +
+        'Hapus soalmu dari kuis lebih dulu (minta partner yang kerjakan).'
+    );
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Membaca attempt v3 di UI
+// ---------------------------------------------------------------------------
+
+/** Apakah attempt ini versi 3 (snapshot tanpa kunci, nilai dari server). */
+export function isV3Attempt(attempt) {
+  return Number(attempt?.schemaVersion) === 3;
+}
+
+/**
+ * Apakah attempt v3 ini masih menunggu nilai server.
+ *
+ * Dibaca dari KEHADIRAN field nilai, bukan dari statusnya saja: server menulis
+ * `score` bersamaan dengan `isAuthoritative`, jadi jawaban "sudah ada nilainya"
+ * harus berdasarkan field yang benar-benar ada di dokumen.
+ */
+export function isAwaitingServerScore(attempt) {
+  if (!isV3Attempt(attempt)) return false;
+  // `score` dan `scorePercent` ditulis server bersamaan, tapi keduanya dicek:
+  // kalau hanya `scorePercent` yang ada (mis. nilai manual tersimpan tapi
+  // agregasinya belum), attempt-nya sudah dinilai dan menampilkan "Belum dinilai"
+  // akan menyesatkan — bukan netral, karena ada angka yang sudah tampil.
+  return (
+    (attempt?.score === null || attempt?.score === undefined) &&
+    (attempt?.scorePercent === null || attempt?.scorePercent === undefined)
+  );
+}
+
+/** Entri snapshot yang masih membawa kunci (hanya mungkin pada attempt v2 lama). */
+export function snapshotHasLegacyKeys(attempt) {
+  return (Array.isArray(attempt?.questionSnapshot) ? attempt.questionSnapshot : []).some(
+    isLegacySnapshotEntry
+  );
+}
+
+/**
+ * Ringkasan nilai attempt untuk daftar kuis, sebagai satu string.
+ *
+ * Attempt v3 yang belum dinilai TIDAK boleh dirender sebagai "0%" atau
+ * "undefined%": nol berarti "salah semua", sedangkan "undefined%" adalah kebocoran
+ * bentuk data ke layar. Kehilangan field nilai adalah keadaan yang sah di sini,
+ * jadi ditulis apa adanya.
+ */
+export function attemptScoreLabel(attempt) {
+  if (isAwaitingServerScore(attempt)) return 'Belum dinilai';
+  const percent = Number(attempt?.scorePercent);
+  return Number.isFinite(percent) ? `${percent}%` : 'Belum dinilai';
 }

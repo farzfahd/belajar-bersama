@@ -29,6 +29,11 @@ firebase-export-*/
 firebase-debug.log
 emulator-data/
 
+# Cloud Functions — hanya `src/` yang di-commit; `lib/` hasil tsc tidak.
+functions/lib/
+functions/*.log
+
+
 # Screenshot verifikasi visual (tests/shot-*.mjs)
 .shots/
 

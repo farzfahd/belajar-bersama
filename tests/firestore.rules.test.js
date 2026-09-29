@@ -41,8 +41,16 @@ let testEnv;
 let failed = 0;
 let total = 0;
 
+// `RulesTestContext` tidak mengekspos `uid`, padahal `createdBy` WAJIB sama
+// dengan uid yang sedang bicara (lihat `allow create` di blok questions).
+// Dipetakan di sini supaya `putQuestion` bisa mengisi `createdBy` dari aktor
+// sebenarnya, bukan dari konstanta.
+const uidOf = new WeakMap();
+
 function authenticated(uid, opts = {}) {
-  return testEnv.authenticatedContext(uid, { email_verified: true, ...opts });
+  const ctx = testEnv.authenticatedContext(uid, { email_verified: true, ...opts });
+  uidOf.set(ctx, uid);
+  return ctx;
 }
 const unauthed = () => testEnv.unauthenticatedContext();
 
@@ -1293,10 +1301,18 @@ async function main() {
   // instance Firestore baru. Carol belum jadi anggota space1.
   const carolCP3 = authenticated('carol');
 
+  // ---------- M1: soalan publik (TANPA kunci) & kunci privat ----------
+  //
+  // PERUBAHAN KONTRAK (security migration M1): `questionData` TIDAK LAGI
+  // menyertakan `answerIndex`. Kunci jawaban pindah ke dokumen terpisah
+  // `questions/{qid}/key/{keyRevision}`. Test yang tadinya memeriksa validasi
+  // kunci (rentang indeks, duplikat, bentuk pasangan, ...) dipindah ke
+  // `keyData` di bawah dengan alasan keamanan yang SAMA - pemindahan lokasi
+  // data tidak boleh berarti kehilangan satu pun pemeriksaan.
   const questionData = (o = {}) => ({
     prompt: 'Berapa 1 + 1?',
     options: ['1', '2', '3', '4'],
-    answerIndex: 1,
+
     topicId: 'topic1',
     difficulty: 'beginner',
     visibility: 'private',
@@ -1310,6 +1326,34 @@ async function main() {
     schemaVersion: 1,
     ...o
   });
+  // Dokumen kunci privat. TIDAK memuat material publik (prompt/options)
+  // supaya tidak ada dua sumber kebenaran yang bisa berbeda.
+  const keyData = (o = {}) => ({
+    type: 'single',
+    keyRevision: '1',
+    schemaVersion: 1,
+    createdAt: serverTimestamp(),
+    ...o
+  });
+
+  const qPath = (id) => `spaces/space1/questions/${id}`;
+  const keyPath = (id, rev = '1') => `${qPath(id)}/key/${rev}`;
+
+  // Tulis soalan publik dulu, baru kuncinya. Urutan ini WAJIB: `keyShapeValid`
+  // membaca `options` dari dokumen soal publik untuk memastikan indeks kunci
+  // benar-benar menunjuk opsi yang ada.
+  //
+  // `createdBy` diisi dari uid aktor, BUKAN dari default `questionData`
+  // ('alice'). Sebelumnya `putQuestion(bob, ...)` menulis soal dengan
+  // `createdBy: 'alice'`, jadi rules menolaknya karena bukan pemilik - dan tes
+  // gagal dengan "evaluation error" yang sama sekali tidak menyebut
+  // ketidakcocokan pemiliknya. `...o` tetap di belakang supaya kasus yang
+  // memang sengaja menguji `createdBy` eksplisit (memalsukan pemilik) bisa
+  // menimpanya.
+  const putQuestion = (ctx, id, o = {}) =>
+    setDoc(doc(fsDb(ctx), qPath(id)), questionData({ createdBy: uidOf.get(ctx), ...o }));
+  const putKey = (ctx, qid, o = {}, rev = '1') =>
+    setDoc(doc(fsDb(ctx), keyPath(qid, rev)), keyData({ ...o, keyRevision: rev }));
 
   const attemptData = (o = {}) => ({
     uid: 'alice',
@@ -1364,42 +1408,22 @@ async function main() {
 
   // ---------- questions ----------
   await it('CP3/Q: anggota membuat soal (private/shared) & field tak valid ditolak', async () => {
-    
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_priv'), questionData()));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ok_shared'),
-      questionData({ visibility: 'shared' })));
-    // Opsi dinamis 2..20 & validasi single choice
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_2opsi'),
-      questionData({ options: ['Ya', 'Tidak'], answerIndex: 0 })));
+    // M1: dokumen soalan publik TANPA kunci apa pun = ALLOW.
+    await assertSucceeds(putQuestion(alice, 'q_ok_priv'));
+    await assertSucceeds(putQuestion(alice, 'q_ok_shared', { visibility: 'shared' }));
+    // Opsi dinamis 2..20 tetap divalidasi di dokumen publik.
+    await assertSucceeds(putQuestion(alice, 'q_2opsi', { options: ['Ya', 'Tidak'] }));
     const twentyOpts = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_20opsi'),
-      questionData({ options: twentyOpts, answerIndex: 19 })));
+    await assertSucceeds(putQuestion(alice, 'q_20opsi', { options: twentyOpts }));
     // 1 opsi ditolak
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_1opsi'),
-      questionData({ options: ['Hanya satu'], answerIndex: 0 })));
+    await assertFails(putQuestion(alice, 'q_1opsi', { options: ['Hanya satu'] }));
     // 21 opsi ditolak
     const twentyOneOpts = Array.from({ length: 21 }, (_, i) => `Opsi ${i + 1}`);
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_21opsi'),
-      questionData({ options: twentyOneOpts, answerIndex: 0 })));
-    // answerIndex out of range ditolak
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ans_out'),
-      questionData({ options: ['A', 'B'], answerIndex: 2 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ans_neg'),
-      questionData({ options: ['A', 'B'], answerIndex: -1 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_ansstr'),
-      questionData({ answerIndex: '1' })));
+    await assertFails(putQuestion(alice, 'q_21opsi', { options: twentyOneOpts }));
     // Opsi duplikat ditolak
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_dup_opts'),
-      questionData({ options: ['Sama', 'Sama', 'Beda'] })));
-    // Multiple select tests
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_ok'),
-      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [0, 2] })));
-    // Multiple select: duplicate correctIndices ditolak
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_dup_idx'),
-      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [1, 1] })));
-    // Multiple select: correctIndex out of range ditolak
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_mult_out_idx'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [5] })));
+    await assertFails(putQuestion(alice, 'q_dup_opts', { options: ['Sama', 'Sama', 'Beda'] }));
+    // Multiple select: dokumen publik tidak pernah boleh memuat correctIndices.
+    await assertSucceeds(putQuestion(alice, 'q_mult_ok', { type: 'multiple', options: ['A', 'B', 'C'] }));
     // Prompt kosong ditolak
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/q_kosong'),
       questionData({ prompt: '' })));
@@ -1553,265 +1577,430 @@ async function main() {
   });
 
   // ---------- CP1-A: validasi struktur bank soal per tipe ----------
-  await it('CP1-A: single choice — batas 2/20 opsi & answerIndex dalam rentang', async () => {
+  // ---------- CP1-A: validasi kunci privat (M1) ----------
+  //
+  // M1: test di bawah tadinya menulis kunci INLINE di dokumen soal. Semua
+  // pemeriksaan itu (rentang indeks, duplikat, keunikan item, bentuk pasangan,
+  // batas 2..20) TETAP WAJIB ada setelah pemisahan kunci — kalau hilang, migrasi
+  // ini justru MELEMAHKAN rules, bukan menguatkannya. Perbedaannya hanya LOKASI:
+  // kini diperiksa di `questions/{qid}/key/{rev}`.
+  await it('CP1-A: single - kunci privat sah & answerIndex dalam rentang opsi publik', async () => {
     const opts20 = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
+    await putQuestion(alice, 'qk_single_max', { options: opts20 });
     // 20 opsi + kunci terakhir = ALLOW (batas atas).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_max'),
-      questionData({ options: opts20, answerIndex: 19 })));
+    await assertSucceeds(putKey(alice, 'qk_single_max', { answerIndex: 19 }));
     // answerIndex -1 / >= options.size() / bukan int = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_neg'),
-      questionData({ options: ['A', 'B'], answerIndex: -1 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_over'),
-      questionData({ options: ['A', 'B'], answerIndex: 2 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_str'),
-      questionData({ options: ['A', 'B'], answerIndex: '0' })));
-    // Opsi kosong / bukan string / duplikat = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_blank'),
-      questionData({ options: ['', 'B'], answerIndex: 0 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_nonstr'),
-      questionData({ options: [1, 'B'], answerIndex: 0 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_dup'),
-      questionData({ options: ['Sama', 'Sama'], answerIndex: 0 })));
-    // type tak dikenal / single tanpa answerIndex = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_badtype'),
-      questionData({ type: 'pilihan_ganda' })));
-    const { answerIndex: _tanpaKunci, ...singleTanpaKunci } = questionData({ options: ['A', 'B'] });
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_nokey'),
-      singleTanpaKunci));
+    // Penegakan rentang ini kini harus membaca dokumen soal publik lewat `get()`,
+    // karena `options` tidak lagi berada di dokumen yang sama dengan kunci.
+    await assertFails(putKey(alice, 'qk_single_max', { answerIndex: -1 }, '2'));
+    await assertFails(putKey(alice, 'qk_single_max', { answerIndex: 20 }, '3'));
+    await assertFails(putKey(alice, 'qk_single_max', { answerIndex: '0' }, '4'));
+    // Kunci WAJIB ada. Soal single tanpa kunci tidak boleh dianggap "sah".
+    await assertFails(putKey(alice, 'qk_single_max', {}, '5'));
+
+    // Opsi kosong / bukan string / duplikat tetap DENY di dokumen publik.
+    await assertFails(putQuestion(alice, 'qk_single_blank', { options: ['', 'B'] }));
+    await assertFails(putQuestion(alice, 'qk_single_nonstr', { options: [1, 'B'] }));
+    await assertFails(putQuestion(alice, 'qk_single_dup', { options: ['Sama', 'Sama'] }));
+    // type tak dikenal = DENY.
+    await assertFails(putQuestion(alice, 'qk_single_badtype', { type: 'pilihan_ganda' }));
   });
 
-  await it('CP1-A: multiple — correctIndices 1..size, unik, SEMUA dalam rentang', async () => {
+  await it('CP1-A: multiple - correctIndices 1..size, unik, SEMUA dalam rentang', async () => {
     // 2 opsi + 1 kunci = ALLOW (batas bawah).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_min'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [1] })));
+    await putQuestion(alice, 'qk_mult_min', { type: 'multiple', options: ['A', 'B'] });
+    await assertSucceeds(putKey(alice, 'qk_mult_min', { type: 'multiple', correctIndices: [1] }));
     // 20 opsi + kunci di batas atas = ALLOW.
     const opts20 = Array.from({ length: 20 }, (_, i) => `Opsi ${i + 1}`);
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_max'),
-      questionData({ type: 'multiple', options: opts20, correctIndices: [0, 19] })));
+    await putQuestion(alice, 'qk_mult_max', { type: 'multiple', options: opts20 });
+    await assertSucceeds(putKey(alice, 'qk_mult_max', { type: 'multiple', correctIndices: [0, 19] }));
     // 5 opsi + kunci terakhir = ALLOW; indeks 5 (>= size) = DENY.
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_edge'),
-      questionData({ type: 'multiple', options: ['A', 'B', 'C', 'D', 'E'], correctIndices: [4] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_edge_over'),
-      questionData({ type: 'multiple', options: ['A', 'B', 'C', 'D', 'E'], correctIndices: [0, 5] })));
+    await putQuestion(alice, 'qk_mult_edge', { type: 'multiple', options: ['A', 'B', 'C', 'D', 'E'] });
+    await assertSucceeds(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [4] }));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [0, 5] }, '3'));
     // correctIndices kosong = DENY (minimal 1 kunci).
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_empty'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [] })));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [] }, '6'));
     // duplikat = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_dup'),
-      questionData({ type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [1, 1] })));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [1, 1] }, '7'));
     // indeks di luar rentang pada posisi mana pun = DENY (dulu hanya indeks 0 dicek).
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_out_first'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [99] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_out_second'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [0, 99] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_neg'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [-1, 0] })));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [99] }, '8'));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [0, 99] }, '9'));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [-1, 0] }, '2'));
     // kunci bukan int (string) = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_str'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: ['1'] })));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: ['1'] }, '4'));
     // correctIndices lebih banyak dari opsi = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_toomany'),
-      questionData({ type: 'multiple', options: ['A', 'B'], correctIndices: [0, 1, 0] })));
-    // multiple tanpa correctIndices = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_mult_nokey'),
-      questionData({ type: 'multiple', options: ['A', 'B'] })));
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple', correctIndices: [0, 1, 0] }, '10'));
+    // Kunci `multiple` tanpa correctIndices = DENY.
+    await assertFails(putKey(alice, 'qk_mult_edge', { type: 'multiple' }, '5'));
   });
 
-  await it('CP1-A: boolean/short_answer/essay — struktur kunci sah & tidak sah', async () => {
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool'),
-      questionData({ type: 'boolean', correctBoolean: false })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool_str'),
-      questionData({ type: 'boolean', correctBoolean: 'true' })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_bool_missing'),
-      questionData({ type: 'boolean' })));
+  await it('CP1-A: boolean/short_answer/essay - kunci privat sah & tidak sah', async () => {
+    await putQuestion(alice, 'qk_bool', { type: 'boolean' });
+    await assertSucceeds(putKey(alice, 'qk_bool', { type: 'boolean', correctBoolean: false }));
+    await assertFails(putKey(alice, 'qk_bool', { type: 'boolean', correctBoolean: 'true' }, '4'));
+    await assertFails(putKey(alice, 'qk_bool', { type: 'boolean' }, '11'));
 
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short'),
-      questionData({ type: 'short_answer', acceptedAnswers: ['2', 'dua'] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_empty'),
-      questionData({ type: 'short_answer', acceptedAnswers: [] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_blank'),
-      questionData({ type: 'short_answer', acceptedAnswers: [''] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_short_num'),
-      questionData({ type: 'short_answer', acceptedAnswers: [2] })));
+    await putQuestion(alice, 'qk_short', { type: 'short_answer' });
+    await assertSucceeds(putKey(alice, 'qk_short', { type: 'short_answer', acceptedAnswers: ['2', 'dua'] }));
+    await assertFails(putKey(alice, 'qk_short', { type: 'short_answer', acceptedAnswers: [] }, '6'));
+    await assertFails(putKey(alice, 'qk_short', { type: 'short_answer', acceptedAnswers: [''] }, '12'));
+    await assertFails(putKey(alice, 'qk_short', { type: 'short_answer', acceptedAnswers: [2] }, '13'));
 
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay'),
-      questionData({ type: 'essay', sampleAnswer: 'Jawaban contoh yang panjang.' })));
-    // sampleAnswer opsional (data lama / soal esai polos tetap sah).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay_plain'),
-      questionData({ type: 'essay' })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_essay_num'),
-      questionData({ type: 'essay', sampleAnswer: 42 })));
+    await putQuestion(alice, 'qk_essay', { type: 'essay' });
+    await assertSucceeds(putKey(alice, 'qk_essay', { type: 'essay', sampleAnswer: 'Jawaban contoh yang panjang.' }));
+    // sampleAnswer OPSIONAL: esai tanpa contoh jawaban dinilai manual. Ini
+    // perilaku yang diharapkan, jadi tidak boleh jadi alasan penolakan.
+    await assertSucceeds(putKey(alice, 'qk_essay', { type: 'essay' }, '14'));
+    await assertFails(putKey(alice, 'qk_essay', { type: 'essay', sampleAnswer: 42 }, '13'));
   });
 
-  await it('CP1-A: matching/ordering/numerical — struktur sah & tidak sah', async () => {
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
-      })));
-    // kurang dari 2 pasangan = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_1pair'),
-      questionData({ type: 'matching', pairs: [{ left: '1', right: 'satu' }] })));
+  await it('CP1-A: matching/ordering - pemisahan publik/key dijaga di kedua sisi', async () => {
+    // ---------- matching: publik `matchLeft`/`matchRight`, kunci `pairs` ----
+    await putQuestion(alice, 'qk_match', {
+      type: 'matching',
+      matchLeft: ['1', '2'],
+      matchRight: ['satu', 'dua']
+    });
+    await assertSucceeds(putKey(alice, 'qk_match', {
+      type: 'matching', pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
+    }));
+    // Dokumen publik TIDAK BOLEH memakai `pairs` — itu kunci jawaban.
+    await assertFails(putQuestion(alice, 'qk_match_inline', {
+      type: 'matching',
+      matchLeft: ['1', '2'],
+      matchRight: ['satu', 'dua'],
+      pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
+    }));
+    // Dua sisi harus sama panjang & unik.
+    await assertFails(putQuestion(alice, 'qk_match_ragged', {
+      type: 'matching', matchLeft: ['1', '2', '3'], matchRight: ['satu', 'dua']
+    }));
+    await assertFails(putQuestion(alice, 'qk_match_dup', {
+      type: 'matching', matchLeft: ['1', '1'], matchRight: ['satu', 'dua']
+    }));
+    // Kunci: kurang dari 2 pasangan = DENY.
+    await assertFails(putKey(alice, 'qk_match', {
+      type: 'matching', pairs: [{ left: '1', right: 'satu' }]
+    }, '15'));
     // left/right kosong atau bukan map = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_blank'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: '', right: 'satu' }, { left: '2', right: 'dua' }]
-      })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_notmap'),
-      questionData({ type: 'matching', pairs: ['satu', 'dua'] })));
+    await assertFails(putKey(alice, 'qk_match', {
+      type: 'matching', pairs: [{ left: '', right: 'satu' }, { left: '2', right: 'dua' }]
+    }, '12'));
+    await assertFails(putKey(alice, 'qk_match', {
+      type: 'matching', pairs: ['satu', 'dua']
+    }, '16'));
 
-    // ---- `pairDraft` (draft editor) --------------------------------------
-    // Syarat burdenednya Opsi B: field tambahan ini HARUS diterima rules
-    // tanpa perubahan rules. Kalau rules menolak, autosave "Lepas pasangan"
-    // akan selalu permission-denied dan seluruh perbaikan tidak berguna.
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Prancis', right: 'Paris' }],
-        // Baris 'Jepang' belum dipasangkan -> `assigned` berisi null
-        pairDraft: {
-          lefts: ['Indonesia', 'Jepang', 'Prancis'],
-          rights: ['Jakarta', 'Tokyo', 'Paris'],
-          assigned: [0, null, 2]
-        }
-      })));
-    // Draft dengan satu baris saja tetap sah (draft boleh di tengah susun).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft_min'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Prancis', right: 'Paris' }],
-        pairDraft: { lefts: ['Indonesia'], rights: ['Jakarta'], assigned: [0] }
-      })));
-    // Soal lama TANPA pairDraft tetap sah (backward compatible, no migration).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_legacy'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: 'Indonesia', right: 'Jakarta' }, { left: 'Jepang', right: 'Tokyo' }]
-      })));
-    // NAMUN `pairDraft` tidak bisa menggantikan answer key: `pairs` tetap
-    // wajib >= 2 pasangan lengkap, apa pun isi draft-nya.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_match_draft_1pair'),
-      questionData({
-        type: 'matching',
-        pairs: [{ left: 'Indonesia', right: 'Jakarta' }],
-        pairDraft: { lefts: ['Indonesia', 'Jepang'], rights: ['Jakarta', 'Tokyo'], assigned: [0, null] }
-      })));
+    // ---------- `pairDraft` (draft editor) ------------------------------
+    // Syarat burdenednya Opsi B: field tambahan ini HARUS diterima rules tanpa
+    // perubahan rules. Kalau rules menolak, autosave "Lepas pasangan" akan
+    // selalu permission-denied dan seluruh perbaikan tidak berguna.
+    // M1: `pairDraft` BUKAN field kunci, jadi tetap boleh di dokumen publik.
+    // (Tetap DILARANG di snapshot attempt v3 - lihat test snapshot.)
+    await assertSucceeds(putQuestion(alice, 'qk_match_draft', {
+      type: 'matching',
+      matchLeft: ['Indonesia', 'Jepang', 'Prancis'],
+      matchRight: ['Jakarta', 'Tokyo', 'Paris'],
+      // Baris 'Jepang' belum dipasangkan -> `assigned` berisi null
+      pairDraft: {
+        lefts: ['Indonesia', 'Jepang', 'Prancis'],
+        rights: ['Jakarta', 'Tokyo', 'Paris'],
+        assigned: [0, null, 2]
+      }
+    }));
+    // Kolam 1 item DITOLAK. Ini bukan berlakunya aturan "draft harus boleh
+    // disimpan separuh jadi": `questionTypeFields.js:150` sudah menolak
+    // `pairs.length < 2` di sisi client, jadi menerima 1 item di rules hanya
+    // akan membuat rules dan client berbeda pendapat tentang soal yang sama.
+    // `pairDraft` tetap bebas di dokumen publik (lihat assertSucceeds di atas).
+    await assertFails(putQuestion(alice, 'qk_match_draft_min', {
+      type: 'matching',
+      matchLeft: ['Indonesia'],
+      matchRight: ['Jakarta'],
+      pairDraft: { lefts: ['Indonesia'], rights: ['Jakarta'], assigned: [0] }
+    }));
+    // NAMUN `pairDraft` tidak bisa menggantikan answer key: `pairs` tetap wajib
+    // >= 2 pasangan lengkap, apa pun isi draft-nya.
+    await putQuestion(alice, 'qk_match_draft1', {
+      type: 'matching', matchLeft: ['Indonesia', 'Jepang'], matchRight: ['Jakarta', 'Tokyo']
+    });
+    await assertFails(putKey(alice, 'qk_match_draft1', {
+      type: 'matching',
+      pairs: [{ left: 'Indonesia', right: 'Jakarta' }]
+    }, '17'));
 
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order'),
-      questionData({ type: 'ordering', items: ['Pertama', 'Kedua', 'Ketiga'] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_1item'),
-      questionData({ type: 'ordering', items: ['Hanya satu'] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_blank'),
-      questionData({ type: 'ordering', items: ['Satu', ''] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_order_dup'),
-      questionData({ type: 'ordering', items: ['Sama', 'Sama'] })));
-
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num'),
-      questionData({ type: 'numerical', correctValue: 2, tolerance: 0.5 })));
-    // correctValue wajib angka; tolerance negatif = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num_str'),
-      questionData({ type: 'numerical', correctValue: '2' })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_num_tol_neg'),
-      questionData({ type: 'numerical', correctValue: 2, tolerance: -1 })));
+    // ---------- ordering: publik `orderItems`, kunci `items` ---------------
+    await putQuestion(alice, 'qk_order', { type: 'ordering', orderItems: ['Pertama', 'Kedua', 'Ketiga'] });
+    await assertSucceeds(putKey(alice, 'qk_order', { type: 'ordering', items: ['Pertama', 'Kedua', 'Ketiga'] }));
+    // Dokumen publik TIDAK BOLEH memakai `items` (itu urutan benar).
+    await assertFails(putQuestion(alice, 'qk_order_inline', {
+      type: 'ordering', orderItems: ['Pertama', 'Kedua'], items: ['Pertama', 'Kedua']
+    }));
+    await assertFails(putQuestion(alice, 'qk_order_1item', { type: 'ordering', orderItems: ['Hanya satu'] }));
+    await assertFails(putQuestion(alice, 'qk_order_blank', { type: 'ordering', orderItems: ['Satu', ''] }));
+    await assertFails(putQuestion(alice, 'qk_order_dup', { type: 'ordering', orderItems: ['Sama', 'Sama'] }));
+    await assertFails(putKey(alice, 'qk_order', { type: 'ordering', items: ['Hanya satu'] }, '18'));
+    await assertFails(putKey(alice, 'qk_order', { type: 'ordering', items: ['Satu', ''] }, '12'));
+    await assertFails(putKey(alice, 'qk_order', { type: 'ordering', items: ['Sama', 'Sama'] }, '7'));
   });
 
-  await it('CP1-A: code/case_study — struktur sah & tidak sah', async () => {
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code'),
-      questionData({
-        type: 'code',
-        starterCode: 'function f() {}',
-        expectedOutput: '1',
-        sampleSolution: 'function f() { return 1; }'
-      })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code_num'),
-      questionData({ type: 'code', starterCode: 123 })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_code_missing'),
-      questionData({ type: 'code' })));
+  await it('CP1-A: numerical - kunci privat sah & tidak sah', async () => {
+    await putQuestion(alice, 'qk_num', { type: 'numerical' });
+    await assertSucceeds(putKey(alice, 'qk_num', { type: 'numerical', correctValue: 2, tolerance: 0.5 }));
+    // correctValue wajib angka; tolerance negatif = DENY.
+    await assertFails(putKey(alice, 'qk_num', { type: 'numerical', correctValue: '2' }, '4'));
+    await assertFails(putKey(alice, 'qk_num', { type: 'numerical', correctValue: 2, tolerance: -1 }, '19'));
+    // Tanpa correctValue = DENY: soal numerik tanpa acuan tidak bisa dinilai.
+    await assertFails(putKey(alice, 'qk_num', { type: 'numerical' }, '11'));
+  });
+
+  await it('CP1-A: code/case_study - kunci privat sah & tidak sah', async () => {
+    await putQuestion(alice, 'qk_code', { type: 'code', starterCode: 'function f() {}' });
+    await assertSucceeds(putKey(alice, 'qk_code', {
+      type: 'code',
+      expectedOutput: '1',
+      sampleSolution: 'function f() { return 1; }'
+    }));
+    // starterCode PUBLIK wajib string.
+    await assertFails(putQuestion(alice, 'qk_code_num', { type: 'code', starterCode: 123 }));
+    await assertFails(putQuestion(alice, 'qk_code_missing', { type: 'code' }));
+    // expectedOutput OPSIONAL di kunci (code bisa dinilai manual).
+    await assertSucceeds(putKey(alice, 'qk_code', { type: 'code' }, '20'));
+    // sampleSolution tidak boleh bocor ke dokumen publik.
+    await assertFails(putQuestion(alice, 'qk_code_leak', {
+      type: 'code', starterCode: 'x', sampleSolution: 'rahasia'
+    }));
 
     // subQuestions kosong tetap sah: grading.js memperlakukan daftar kosong
     // sebagai soal otomatis (CP1-STEP4: form kini punya editor sub-soal).
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case'),
-      questionData({ type: 'case_study', caseText: 'Sebuah kasus...', subQuestions: [] })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_sub'),
-      questionData({
-        type: 'case_study',
-        caseText: 'Sebuah kasus...',
-        subQuestions: [{ type: 'boolean', correctBoolean: true }]
-      })));
-    // caseText kosong / bukan string = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_empty'),
-      questionData({ type: 'case_study', caseText: '', subQuestions: [] })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_num'),
-      questionData({ type: 'case_study', caseText: 5, subQuestions: [] })));
+    await putQuestion(alice, 'qk_case', { type: 'case_study', caseText: 'Sebuah kasus...', subQuestions: [] });
+    await assertSucceeds(putKey(alice, 'qk_case', { type: 'case_study', subQuestions: [] }));
+    // Sub-soal publik + kunci sub-soal terpisah.
+    await putQuestion(alice, 'qk_case_sub', {
+      type: 'case_study',
+      caseText: 'Sebuah kasus...',
+      subQuestions: [{ type: 'boolean' }]
+    });
+    await assertSucceeds(putKey(alice, 'qk_case_sub', {
+      type: 'case_study', subQuestions: [{ type: 'boolean', correctBoolean: true }]
+    }));
+    // caseText kosong / bukan string = DENY (di dokumen publik).
+    await assertFails(putQuestion(alice, 'qk_case_empty', { type: 'case_study', caseText: '', subQuestions: [] }));
+    await assertFails(putQuestion(alice, 'qk_case_num', { type: 'case_study', caseText: 5, subQuestions: [] }));
     // subQuestions > 10 atau elemen pertama bukan map = DENY.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_overflow'),
-      questionData({
-        type: 'case_study',
-        caseText: 'Kasus',
-        subQuestions: Array.from({ length: 11 }, () => ({ type: 'essay' }))
-      })));
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_case_badsub'),
-      questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: ['bukan-map'] })));
+    await assertFails(putQuestion(alice, 'qk_case_overflow', {
+      type: 'case_study',
+      caseText: 'Kasus',
+      subQuestions: Array.from({ length: 11 }, () => ({ type: 'boolean' }))
+    }));
+    await assertFails(putQuestion(alice, 'qk_case_badsub', {
+      type: 'case_study', caseText: 'Kasus', subQuestions: ['bukan-map']
+    }));
+    // Sub-soal kunci tidak boleh membawa material publik: `prompt` di dokumen
+    // kunci = dua sumber kebenaran.
+    await assertFails(putKey(alice, 'qk_case_sub', {
+      type: 'case_study', subQuestions: [{ type: 'boolean', correctBoolean: true, prompt: 'bocor' }]
+    }, '21'));
+  });
+  // ---------- P2: privasi & integritas dokumen kunci ----------
+  //
+  // INI adalah lapisan otorisasi utama dari pemisahan kunci. Field-level secrecy
+  // mustahil di Firestore: selama kunci berada di dokumen yang sama dengan
+  // prompt, siapa pun yang boleh `get` dokumen itu juga bisa membacanya. Karena
+  // itu kunci pindah ke subkoleksi terpisah, dan aturannya diuji di sini.
+  await it('Q-KEY/P2: hanya author soal yang boleh membaca kuncinya', async () => {
+    // Soal + kunci milik ALICE.
+    await putQuestion(alice, 'qk_p2', { visibility: 'shared', options: ['1', '2', '3', '4'] });
+    await assertSucceeds(putKey(alice, 'qk_p2', { answerIndex: 1 }));
+
+    // (Q-KEY-1) Author boleh membaca kunci sendiri.
+    await assertSucceeds(getDoc(doc(fsDb(alice), keyPath('qk_p2'))));
+    await assertSucceeds(getDocs(collection(fsDb(alice), `${qPath('qk_p2')}/key`)));
+    // (Q-KEY-2) Partner adalah anggota space, soal-nya pun SHARED - tapi kunci
+    // tetap harus TERTUTUP. Inilah yang membedakan v3 dari "semua anggota boleh
+    // baca": tanpa baris ini, partner tinggal get subkoleksi `key`.
+    await assertFails(getDoc(doc(fsDb(bob), keyPath('qk_p2'))));
+    await assertFails(getDocs(collection(fsDb(bob), `${qPath('qk_p2')}/key`)));
+    // (Q-KEY-3) Non-member juga ditolak.
+    await assertFails(getDoc(doc(fsDb(carolCP3), keyPath('qk_p2'))));
+    // (Q-KEY-4) Anonim ditolak.
+    await assertFails(getDoc(doc(fsDb(unauthed()), keyPath('qk_p2'))));
+    // Partner tetap boleh membaca dokumen soal publiknya (hanya kuncinya yang
+    // tertutup) - membuktikan penutupan tidak menutup semua akses.
+    await assertSucceeds(getDoc(doc(fsDb(bob), qPath('qk_p2'))));
   });
 
+  await it('Q-KEY/P2: hanya author yang boleh menulis kunci', async () => {
+    await putQuestion(alice, 'qk_p2w', { visibility: 'shared', options: ['A', 'B'] });
+    // (Q-KEY-5) Partner tidak boleh membuat kunci untuk soal orang lain.
+    await assertFails(putKey(bob, 'qk_p2w', { answerIndex: 0 }));
+    // (Q-KEY-7) Author boleh, dan kuncinya harus sah.
+    await assertSucceeds(putKey(alice, 'qk_p2w', { answerIndex: 0 }));
+    // (Q-KEY-6) Non-member tidak boleh.
+    await assertFails(putKey(carolCP3, 'qk_p2w', { answerIndex: 1 }, '2'));
+    // Anonim tidak boleh.
+    await assertFails(putKey(unauthed(), 'qk_p2w', { answerIndex: 1 }, '3'));
+    // Kunci tidak boleh dihapus: attempt lama menunjuk revisi ini, jadi menghapusnya
+    // akan membuat attempt lama tidak bisa dinilai tanpa bisa dijelaskan.
+    await assertFails(deleteDoc(doc(fsDb(alice), keyPath('qk_p2w'))));
+    await assertFails(deleteDoc(doc(fsDb(bob), keyPath('qk_p2w'))));
+  });
+
+  await it('Q-KEY: revisi kunci immutable & bentuknya divalidasi', async () => {
+    await putQuestion(alice, 'qk_rev', { visibility: 'shared', options: ['A', 'B', 'C'] });
+    await assertSucceeds(putKey(alice, 'qk_rev', { answerIndex: 0 }));
+    // (Q-KEY-9) Revisi yang sudah tertulis tidak boleh diubah isinya. Kalau boleh,
+    // attempt lama yang menunjuk revisi ini bisa diam-diam dinilai dengan kunci
+    // yang sudah diganti.
+    await assertFails(updateDoc(doc(fsDb(alice), keyPath('qk_rev')), { answerIndex: 2 }));
+    await assertFails(updateDoc(doc(fsDb(alice), keyPath('qk_rev')), { answerIndex: 0 })); // tetap DENY
+    await assertFails(setDoc(doc(fsDb(alice), keyPath('qk_rev')), keyData({ answerIndex: 2 })));
+    // Revisi BARU tetap boleh: itu cara yang benar untuk mengubah kunci.
+    await assertSucceeds(putKey(alice, 'qk_rev', { answerIndex: 2 }, '2'));
+    // Kunci lama masih utuh.
+    const old = await getDoc(doc(fsDb(alice), keyPath('qk_rev')));
+    assert.equal(old.exists(), true);
+    assert.equal(old.data().answerIndex, 0);
+
+    // (Q-KEY-8) Bentuk kunci tidak sah ditolak.
+    //
+    // CATATAN: `keyRevision: '9'` ditulis SEBELUM `...bad`, bukan sesudah. Kalau
+    // ditulis sesudah, spread `bad` yang memuat `keyRevision: '99'` tertimpa
+    // kembali jadi '9' dan kasus "tidak cocok dengan path" ini justru menulis
+    // kunci yang SAH ke path revisi '9' - tesnya lulus karena menguji kebalikan
+    // dari yang dimaksud.
+    for (const [label, bad] of [
+      ['tanpa field kunci', {}],
+      ['tipe tidak dikenal', { type: 'mystery', answerIndex: 0 }],
+      ['schemaVersion salah', { type: 'single', answerIndex: 0, schemaVersion: 2 }],
+      ['keyRevision tidak cocok dengan path', { type: 'single', answerIndex: 0, keyRevision: '99' }],
+      ['answerIndex bukan int', { type: 'single', answerIndex: '0' }],
+      ['answerIndex di luar opsi', { type: 'single', answerIndex: 9 }],
+      ['kunci membawa material publik', { type: 'single', answerIndex: 0, prompt: 'duplikat' }],
+      ['kunci membawa options', { type: 'single', answerIndex: 0, options: ['A', 'B', 'C'] }]
+    ]) {
+      await assertFails(setDoc(doc(fsDb(alice), keyPath('qk_rev', '9')),
+        keyData({ keyRevision: '9', ...bad })), label);
+    }
+  });
+
+  await it('Q-KEY: kunci soal yang dihapus/berubah tidak membuka celah baru', async () => {
+    // Kunci hanya boleh dibuat untuk soal yang benar-benar ada. Tanpa `exists()`,
+    // `get()` pada dokumen yang tidak ada menghasilkan evaluation error.
+    await assertFails(putKey(alice, 'qk_hantu', { answerIndex: 0 }));
+    // Kunci untuk soal milik orang lain: dokumen soal harus milik pemanggil.
+    await putQuestion(bob, 'qk_bob', { visibility: 'shared', options: ['A', 'B'] });
+    await assertFails(putKey(alice, 'qk_bob', { answerIndex: 0 }));
+  });
   // ---------- CP1-STEP4: studi kasus maksimal 1 tingkat ----------
-  await it('CP1/CS: sub-soal satu tingkat sah untuk 7 tipe otomatis', async () => {
-    const sub = (s) => questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: [s] });
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_bool'), sub({
-      type: 'boolean', correctBoolean: false
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_single'), sub({
-      type: 'single', options: ['A', 'B'], answerIndex: 1
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_short'), sub({
-      type: 'short_answer', acceptedAnswers: ['ya']
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_match'), sub({
-      type: 'matching', pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }]
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_order'), sub({
-      type: 'ordering', items: ['a', 'b']
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_num'), sub({
-      type: 'numerical', correctValue: 3, tolerance: 1
-    })));
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_multi'), sub({
-      type: 'multiple', options: ['A', 'B', 'C'], correctIndices: [0, 2]
-    })));
+  // ---------- CP1/CS: sub-soal publik + kunci sub-soal privat ----------
+  //
+  // M1: nesting satu tingkat tetap berlaku, tapi SEKARANG berlaku di dua dokumen
+  // sekaligus: sub-soal publik (dokumen soal) dan sub-soal kunci (dokumen
+  // kunci). Keduanya dicek rules secara terpisah.
+  await it('CP1/CS: sub-soal satu tingkat sah untuk 7 tipe otomatis (publik + kunci)', async () => {
+    // each: [suffix, publicSub, keySub]
+    const cases = [
+      ['bool', { type: 'boolean' }, { type: 'boolean', correctBoolean: false }],
+      ['single', { type: 'single', options: ['A', 'B'] }, { type: 'single', answerIndex: 1 }],
+      ['short', { type: 'short_answer' }, { type: 'short_answer', acceptedAnswers: ['ya'] }],
+      ['match', { type: 'matching', matchLeft: ['1', '2'], matchRight: ['satu', 'dua'] },
+        { type: 'matching', pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }] }],
+      ['order', { type: 'ordering', orderItems: ['a', 'b'] }, { type: 'ordering', items: ['a', 'b'] }],
+      ['num', { type: 'numerical' }, { type: 'numerical', correctValue: 3, tolerance: 1 }],
+      ['multi', { type: 'multiple', options: ['A', 'B', 'C'] }, { type: 'multiple', correctIndices: [0, 2] }]
+    ];
+    for (const [suffix, pubSub, keySub] of cases) {
+      const id = `qk_cs_${suffix}`;
+      // Soalan publik: stem + sub-soal publik tanpa kunci.
+      await assertSucceeds(putQuestion(alice, id, {
+        type: 'case_study', caseText: 'Kasus', subQuestions: [pubSub]
+      }));
+      // Kunci privat: sub-soal kunci tanpa material publik.
+      await assertSucceeds(putKey(alice, id, { type: 'case_study', subQuestions: [keySub] }));
+    }
   });
 
-  await it('CP1/CS: nested >1 tingkat DITOLAK rules', async () => {
-    // Sub-soal yang membawa subQuestions sendiri = nesting tingkat 2.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_nested'), questionData({
+  await it('CP1/CS: sub-soal publik tidak boleh membawa kunci', async () => {
+    // Sub-soal publik mewarisi larangan yang sama dengan dokumen soal: tidak
+    // boleh ada answerIndex/correctIndices/etc. di dalamnya.
+    for (const [suffix, pubSub] of [
+      ['bool', { type: 'boolean', correctBoolean: true }],
+      ['single', { type: 'single', options: ['A', 'B'], answerIndex: 0 }],
+      ['short', { type: 'short_answer', acceptedAnswers: ['x'] }],
+      ['multi', { type: 'multiple', options: ['A', 'B'], correctIndices: [0] }],
+      ['num', { type: 'numerical', correctValue: 1 }],
+      ['match', { type: 'matching', matchLeft: ['1', '2'], matchRight: ['satu', 'dua'],
+        pairs: [{ left: '1', right: 'satu' }, { left: '2', right: 'dua' }] }],
+      ['order', { type: 'ordering', orderItems: ['a', 'b'], items: ['a', 'b'] }]
+    ]) {
+      await assertFails(putQuestion(alice, `qk_cs_leak_${suffix}`, {
+        type: 'case_study', caseText: 'Kasus', subQuestions: [pubSub]
+      }));
+    }
+  });
+
+  await it('CP1/CS: sub-soal kunci tidak boleh membawa material publik', async () => {
+    await putQuestion(alice, 'qk_cs_pub', {
+      type: 'case_study', caseText: 'Kasus', subQuestions: [{ type: 'single', options: ['A', 'B'] }]
+    });
+    // `prompt`/`options` di dokumen kunci = dua sumber kebenaran.
+    await assertFails(putKey(alice, 'qk_cs_pub', {
+      type: 'case_study', subQuestions: [{ type: 'single', answerIndex: 0, prompt: 'bocor' }]
+    }, '2'));
+    // `matchLeft` di dokumen kunci = kumpulan publik bocor ke dokumen privat.
+    await assertFails(putKey(alice, 'qk_cs_pub', {
+      type: 'case_study', subQuestions: [{ type: 'single', answerIndex: 0, matchLeft: ['1'] }]
+    }, '3'));
+  });
+
+  await it('CP1/CS: nested >1 tingkat DITOLAK rules (publik & kunci)', async () => {
+    // Sub-soal PUBLIK yang membawa subQuestions sendiri = nesting tingkat 2.
+    await assertFails(putQuestion(alice, 'qk_cs_nested', {
       type: 'case_study',
       caseText: 'Kasus',
       subQuestions: [{
         type: 'single',
         options: ['A', 'B'],
-        answerIndex: 0,
-        subQuestions: [{ type: 'boolean', correctBoolean: true }]
+        subQuestions: [{ type: 'boolean' }]
       }]
-    })));
+    }));
     // Varian kunci `subQuestion` (singular) juga ditolak.
-    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_cs_nested2'), questionData({
+    await assertFails(putQuestion(alice, 'qk_cs_nested2', {
       type: 'case_study',
       caseText: 'Kasus',
-      subQuestions: [{ type: 'boolean', correctBoolean: true, subQuestion: { type: 'boolean' } }]
-    })));
-    // Tipe yang butuh manual / nesting tidak boleh jadi sub-soal.
+      subQuestions: [{ type: 'boolean', subQuestion: { type: 'boolean' } }]
+    }));
+    // Tipe yang butuh manual / nesting tidak boleh jadi sub-soal PUBLIK.
     for (const [suffix, sub] of [
-      ['essay', { type: 'essay', sampleAnswer: 'x' }],
+      ['essay', { type: 'essay' }],
       ['code', { type: 'code', starterCode: 'x' }],
       ['case', { type: 'case_study', caseText: 'x' }],
       ['unknown', { type: 'mystery' }],
       ['notype', {}]
     ]) {
-      await assertFails(setDoc(doc(fsDb(alice), `spaces/space1/questions/qa_cs_bad_${suffix}`),
-        questionData({ type: 'case_study', caseText: 'Kasus', subQuestions: [sub] })));
+      await assertFails(putQuestion(alice, `qk_cs_bad_${suffix}`, {
+        type: 'case_study', caseText: 'Kasus', subQuestions: [sub]
+      }));
     }
+    // DAN tidak boleh jadi sub-soal KUNCI.
+    await putQuestion(alice, 'qk_cs_badsub_pub', {
+      type: 'case_study', caseText: 'Kasus', subQuestions: [{ type: 'boolean' }]
+    });
+    for (const [suffix, sub] of [
+      ['essay', { type: 'essay', sampleAnswer: 'x' }],
+      ['case', { type: 'case_study', subQuestions: [] }],
+      ['unknown', { type: 'mystery' }]
+    ]) {
+      await assertFails(putKey(alice, 'qk_cs_badsub_pub', {
+        type: 'case_study', subQuestions: [sub]
+      }, `k_${suffix}`));
+    }
+    // Kunci bersarang dua tingkat juga ditolak.
+    await assertFails(putKey(alice, 'qk_cs_badsub_pub', {
+      type: 'case_study',
+      subQuestions: [{ type: 'boolean', correctBoolean: true, subQuestions: [{ type: 'boolean' }] }]
+    }, 'k_nested'));
   });
-
   // ---------- CP1-A: keamanan bank soal ----------
   await it('CP1-A: non-anggota & tamu ditolak baca/tulis/ubah/hapus soal', async () => {
     // carol bukan anggota space1 (lihat komentar carolCP3 di blok CP3).
@@ -1828,12 +2017,14 @@ async function main() {
   });
 
   await it('CP1-A: soal private tidak bocor ke partner; shared terbaca tapi tetap milik owner', async () => {
+    // Fixture sendiri: blok CP1-A yang di atas memakai id `qk_*`, jadi dokumen
+    // yang diuji di sini dibuat eksplisit (tidak bergantung soal lain).
+    await assertSucceeds(putQuestion(alice, 'qa_private_own', { visibility: 'private' }));
     // Private: hanya owner.
-    await assertFails(getDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_single_max')));
-    await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_single_max')));
+    await assertFails(getDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_private_own')));
+    await assertSucceeds(getDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_private_own')));
     // Shared: partner boleh membaca…
-    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/questions/qa_shared_new'),
-      questionData({ visibility: 'shared' })));
+    await assertSucceeds(putQuestion(alice, 'qa_shared_new', { visibility: 'shared' }));
     await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new')));
     // …tapi tidak boleh mengubah/menghapus (ownership tetap di creator).
     await assertFails(updateDoc(doc(fsDb(bob), 'spaces/space1/questions/qa_shared_new'),
@@ -2138,6 +2329,47 @@ async function main() {
       { questionIds: ['a', 'b'], updatedAt: serverTimestamp() }));
   });
 
+  await it('CP1/QUIZ: manifest kunci (questionKeyRevisions) boleh ditulis & dibaca', async () => {
+    // `questionKeyRevisions` = nomor revisi kunci yang dikunci kuis ini. Client
+    // menulisnya setiap kali `questionIds` berubah (quizService
+    // `updateQuizQuestionIds`), supaya attempt yang dimulai di kemudian hari
+    // dinilai terhadap kunci versi yang sama.
+    //
+    // Yang TIDAK ada di sini: isi kunci. Yang disimpan cuma NOMOR revisi, dan
+    // dokumen soal tetap bebas kunci - jadi manifest ini tidak melemahkan
+    // pemisahan kunci sedikit pun.
+    const manifest = { q_ok_shared: '2', q_2opsi: '1' };
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pin'),
+      quizData({ questionKeyRevisions: manifest })));
+    // Manifest boleh di-update (kuis menambah/mengurangi soal) oleh pembuatnya.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pin'), {
+      questionIds: ['q_ok_shared'],
+      questionKeyRevisions: { q_ok_shared: '2' },
+      updatedAt: serverTimestamp()
+    }));
+    // Manifest kosong sah: kuis yang soal-soalnya belum punya revisi (kuis lama
+    // sebelum fitur ini) tetap boleh disimpan tanpa pin.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pinkosong'),
+      quizData({ questionKeyRevisions: {} })));
+    // Manifest TIDAK boleh lebih banyak dari soal yang ada di kuis: pin untuk
+    // soal yang sudah dikeluarkan tidak ada gunanya, dan rules tidak bisa
+    // memeriksa isi map key satu per satu.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pinbesar'),
+      quizData({
+        questionIds: ['q_ok_shared'],
+        questionKeyRevisions: { q_ok_shared: '1', q_2opsi: '1', q_ok_shared2: '1' }
+      })));
+    // Field bukan map ditolak.
+    await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_pinbukanmap'),
+      quizData({ questionKeyRevisions: ['q_ok_shared'] })));
+    // Manifest tidak undermined kontrol akses kuis: non-member tetap tidak
+    // boleh menulis kuis, dan partner boleh membaca (hanya nomor revisi).
+    await assertFails(setDoc(doc(fsDb(carolCP3), 'spaces/space1/quizzes/qu_pin'),
+      quizData({ questionKeyRevisions: manifest })));
+    await assertSucceeds(getDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_pin')));
+    await assertFails(getDoc(doc(fsDb(carolCP3), 'spaces/space1/quizzes/qu_pin')));
+  });
+
   await it('CP1/QUIZ: field dasar & struktur tidak valid ditolak', async () => {
     // Judul wajib & batas panjang.
     await assertFails(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_judulkosong'),
@@ -2221,30 +2453,37 @@ async function main() {
   });
 
   // ==========================================================
-  // CP2 — attempts (nested di bawah quizzes/{quizId})
+  // CP2 — attempts v3 (nested di bawah quizzes/{quizId})
   // ==========================================================
   // Kuis induk wajib ada: validQuizAttempt menolak attempt pada quiz hantu.
   // CATATAN NAMA: prefiks `cp2` dipakai agar tidak bentrok dengan helper
   // `attemptData` milik blok legacy `quizAttempts` (CP3-era) di atas.
   //
-  // SKEMA v2: `questionSnapshot` memuat ISI LENGKAP tiap soal (bukan ID), agar
-  // attempt tidak ikut berubah saat soal di Question Bank diedit atau dihapus.
-  // `cp2Snap` sengaja memakai NAMA FIELD YANG SAMA dengan dokumen soal supaya
-  // `validSnapshotEntry` (rules) bisa memakai ulang `validQuestionTypeSpecific`
-  // apa adanya.
+  // PERUBAHAN KONTRAK (security migration): attempt yang boleh DIBUAT sekarang
+  // hanya v3. v2 (skor ditulis client + snapshot menyalin kunci) tidak lagi
+  // boleh dibuat, tapi attempt v2 yang sudah terlanjur ada tetap bisa dibaca dan
+  // di-update sesuai aturan lamanya (grandfathered). Lihat blok test v2 di bawah.
+  //
+  // Snapshot v3 TIDAK boleh memuat kunci apa pun. Kunci dibaca server dari
+  // `questions/{qid}/key/{keyRevision}`; peserta tidak pernah membaca-nya.
+
+  // Snapshot v3: material publik saja. `keyRevision` WAJIB ada supaya server
+  // tahu kunci mana yang dipakai (snapshotV3.js selalu mengisinya).
   const cp2Snap = (o = {}) => ({
-    id: 'q_ok_shared',
+    id: 'cp2q1',
+    keyRevision: '1',
     type: 'single',
     prompt: 'Berapa 1 + 1?',
     points: 10,
     options: ['1', '2', '3', '4'],
-    answerIndex: 1,
     ...o
   });
 
-  // Soal yang sudah hilang saat attempt dimulai (kasus tepi).
+  // Soal yang sudah hilang saat attempt dimulai (kasus tepi). Tetap perlu
+  // `keyRevision` supaya attempt lama tidak berubah makna bila soal muncul lagi.
   const cp2SnapUnavailable = (o = {}) => ({
-    id: 'q_hilang',
+    id: 'cp2q_hilang',
+    keyRevision: '1',
     type: 'unavailable',
     prompt: '',
     points: 0,
@@ -2252,37 +2491,37 @@ async function main() {
     ...o
   });
 
+  // Entri jawaban v3. TIDAK memuat `isCorrect`/`pointsEarned`/`needsManualGrade`:
+  // itu hasil penilaian server. Client hanya menulis `userAnswer`.
   const cp2Answer = (o = {}) => ({
-    questionId: 'q_ok_shared',
+    questionId: 'cp2q1',
     userAnswer: 1,
-    isCorrect: true,
-    pointsEarned: 10,
-    needsManualGrade: false,
-    manualScore: null,
-    manualFeedback: '',
-    gradedBy: null,
-    gradedAt: null,
     ...o
   });
 
+  // Attempt v3 saat dibuat: BELUM ada skor. Skor adalah field server.
   const cp2Attempt = (o = {}) => ({
     uid: 'alice',
-    quizId: 'qu_ok',
+    quizId: 'qu_cp2',
     startedAt: serverTimestamp(),
-    completedAt: null,
-    durationSeconds: null,
     questionSnapshot: [cp2Snap()],
     answers: [cp2Answer()],
-    score: 0,
-    maxScore: 0,
-    scorePercent: 0,
-    passed: false,
     status: 'in_progress',
-    schemaVersion: 2,
+    schemaVersion: 3,
     ...o
   });
 
-  const attemptPath = (id) => `spaces/space1/quizzes/qu_ok/attempts/${id}`;
+  const attemptPath = (id, quiz = 'qu_cp2') => `spaces/space1/quizzes/${quiz}/attempts/${id}`;
+
+  // ---------- fixture: kuis milik bob berisi soal miliknya ----------
+  //
+  // PENTING untuk author exclusion (P2): alice TIDAK boleh mengerjakan kuis
+  // yang memuat soal miliknya sendiri. Semua test attempt di bawah memakai
+  // `qu_cp2` yang soal-soalnya dibuat oleh BOB, sehingga alice boleh mulai.
+  await putQuestion(bob, 'cp2q1', { visibility: 'shared', options: ['1', '2', '3', '4'] });
+  await putQuestion(bob, 'cp2q2', { visibility: 'shared', options: ['Ya', 'Tidak'] });
+  await assertSucceeds(setDoc(doc(fsDb(bob), 'spaces/space1/quizzes/qu_cp2'),
+    quizData({ createdBy: 'bob', questionIds: ['cp2q1', 'cp2q2'] })));
 
   await it('CP2/ATTEMPT: attempts privat — owner baca sendiri, user lain tidak bisa', async () => {
     await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_privat')), cp2Attempt()));
@@ -2291,17 +2530,14 @@ async function main() {
     await assertFails(getDoc(doc(fsDb(bob), attemptPath('at_privat'))));
     await assertFails(getDoc(doc(fsDb(carolCP3), attemptPath('at_privat'))));
     // List pun tidak menyingkapkan attempt partner.
-    await assertFails(getDocs(collection(fsDb(bob), 'spaces/space1/quizzes/qu_ok/attempts')));
+    await assertFails(getDocs(collection(fsDb(bob), 'spaces/space1/quizzes/qu_cp2/attempts')));
   });
 
-  await it('CP2/ATTEMPT: create valid hanya untuk pemilik; uid/status palsu ditolak', async () => {
+  await it('CP2/ATTEMPT: create v3 valid hanya untuk pemilik; uid/status palsu ditolak', async () => {
     await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_create')),
       cp2Attempt({
-        questionSnapshot: [
-          cp2Snap(),
-          cp2Snap({ id: 'q_2opsi', options: ['Ya', 'Tidak'], answerIndex: 0 })
-        ],
-        answers: [cp2Answer(), cp2Answer({ questionId: 'q_2opsi' })]
+        questionSnapshot: [cp2Snap(), cp2Snap({ id: 'cp2q2', options: ['Ya', 'Tidak'] })],
+        answers: [cp2Answer(), cp2Answer({ questionId: 'cp2q2' })]
       })));
     // uid harus pemanggil.
     await assertFails(setDoc(doc(fsDb(bob), attemptPath('at_uidPalsu')), cp2Attempt({ uid: 'alice' })));
@@ -2319,48 +2555,73 @@ async function main() {
     await assertFails(setDoc(doc(fsDb(carolCP3), attemptPath('at_carol')), cp2Attempt({ uid: 'carol' })));
   });
 
-  await it('CP2/ATTEMPT: field struktural immutable; jawaban terkunci setelah ditutup', async () => {
-    const p = attemptPath('at_immutable');
-    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
-    // Immutable: uid, quizId, startedAt, questionSnapshot, schemaVersion.
-    await assertFails(updateDoc(doc(fsDb(alice), p), { uid: 'bob' }));
-    await assertFails(updateDoc(doc(fsDb(alice), p), { quizId: 'qu_lain' }));
-    await assertFails(updateDoc(doc(fsDb(alice), p), { startedAt: new Date() }));
-    await assertFails(updateDoc(doc(fsDb(alice), p), {
-      questionSnapshot: [cp2Snap({ answerIndex: 3 })]
-    }));
-    await assertFails(updateDoc(doc(fsDb(alice), p), { schemaVersion: 1 }));
-    // Selama masih in_progress, answers boleh diubah (menyimpan jawaban).
-    await assertSucceeds(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 2 })] }));
-    // Tutup attempt.
-    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
-      status: 'completed', completedAt: serverTimestamp(), score: 0, maxScore: 10, scorePercent: 0
-    }));
-    // Setelah tertutup, answers terkunci.
-    await assertFails(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 0 })] }));
+  await it('CP2/ATTEMPT: P2 author exclusion — soal sendiri tidak boleh dikerjakan', async () => {
+    // `qu_milik_sendiri` memuat `q_ok_shared` yang dibuat oleh ALICE.
+    await assertSucceeds(setDoc(doc(fsDb(alice), 'spaces/space1/quizzes/qu_milik_sendiri'),
+      quizData({ questionIds: ['q_ok_shared'] })));
+    // MEMBUAT attempt = dinilai soal sendiri = DENY.
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_author', 'qu_milik_sendiri')),
+      cp2Attempt({ quizId: 'qu_milik_sendiri', questionSnapshot: [cp2Snap({ id: 'q_ok_shared' })] })));
+    // Sebaliknya: `qu_cp2` memuat soal BOB, jadi alice BOLEH mulai.
+    // Ini yang membuktikan aturan tidak menolak semua orang, hanya penulisnya.
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_bukan_author')),
+      cp2Attempt({ questionSnapshot: [cp2Snap({ id: 'cp2q1' })] })));
   });
 
-  // Attempt yang sudah SELESAI dengan satu soal manual. Wajib dibuat lewat dua
-  // langkah: create selalu `in_progress` (ditegakkan rules), baru di-update ke
-  // `pending_manual_grade` oleh pemiliknya.
-  const seedFinishedWithManual = async (path) => {
-    await assertSucceeds(setDoc(doc(fsDb(alice), path), cp2Attempt({
-      answers: [cp2Answer({ needsManualGrade: true, isCorrect: null, pointsEarned: 0 })]
-    })));
-    await assertSucceeds(updateDoc(doc(fsDb(alice), path), {
-      status: 'pending_manual_grade',
-      completedAt: serverTimestamp(),
-      score: 0,
-      maxScore: 10,
-      scorePercent: 0
-    }));
-  };
+  await it('CP2/ATTEMPT: snapshot v3 bebas kunci — tiap field kunci DITOLAK', async () => {
+    // Ini adalah heart dari pemisahan kunci: kalau satu saja field kunci ini
+    // lolos ke snapshot, peserta bisa menilai sendiri memakai `grading.js` yang
+    // memang ikut ter-bundle di client.
+    const keyLeaks = [
+      ['answerIndex', { answerIndex: 1 }],
+      ['correctIndices', { correctIndices: [1] }],
+      ['correctBoolean', { correctBoolean: true }],
+      ['acceptedAnswers', { acceptedAnswers: ['2'] }],
+      ['sampleAnswer', { sampleAnswer: 'jawaban' }],
+      ['pairs', { pairs: [{ left: '1', right: 'satu' }] }],
+      ['items', { items: ['a', 'b'] }],
+      ['correctValue', { correctValue: 2 }],
+      ['tolerance', { tolerance: 1 }],
+      ['expectedOutput', { expectedOutput: '1' }],
+      ['sampleSolution', { sampleSolution: 'rahasia' }],
+      ['pairDraft', { pairDraft: { lefts: ['1'], rights: ['satu'], assigned: [0] } }],
+      ['explanation', { explanation: 'kuncinya 2' }]
+    ];
+    for (const [i, [label, leak]] of keyLeaks.entries()) {
+      try {
+        await assertFails(setDoc(doc(fsDb(alice), attemptPath(`at_leak_${i}`)),
+          cp2Attempt({ questionSnapshot: [cp2Snap(leak)] })));
+      } catch (err) {
+        throw new Error(`[${i}] ${label}: ${err.message}`);
+      }
+    }
+    // `matching`/`ordering` tetap boleh — tapi HANYA dengan bentuk publiknya.
+    // `matchLeft`/`matchRight`/`orderItems` = material, `pairs`/`items` = kunci.
+    //
+    // CATATAN: `options` TIDAK boleh di-set ke `undefined` untuk-soal matching.
+    // Firestore SDK menolak nilai `undefined` sebelum rules sempat dievaluasi,
+    // jadi testnya akan gagal karena alasan yang salah. Field-nya harus dihapus
+    // dari objek, bukan diisi `undefined`.
+    const snapWithoutOptions = (o) => {
+      const { options: _buang, ...sisa } = cp2Snap(o);
+      return sisa;
+    };
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_snap_match_ok')),
+      cp2Attempt({
+        questionSnapshot: [snapWithoutOptions({ type: 'matching',
+          matchLeft: ['1', '2'], matchRight: ['satu', 'dua'] })],
+        answers: [cp2Answer()]
+      })));
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_snap_order_ok')),
+      cp2Attempt({
+        questionSnapshot: [snapWithoutOptions({ type: 'ordering', orderItems: ['a', 'b'] })],
+        answers: [cp2Answer()]
+      })));
+  });
 
-  await it('CP2/ATTEMPT: snapshot berisi isi soal — bentuk salah & user lain ditolak', async () => {
-    // Skema snapshot: entri harus memuat isi soal, bukan ID.
-    // (a) Bentuk yang tidak bisa dinilai DITOLAK saat create.
+  await it('CP2/ATTEMPT: snapshot v3 bentuk salah & user lain ditolak', async () => {
     // CATATAN: jangan pakai nilai `undefined` di fixture — Firestore SDK menolaknya
-    // sebelum rules sempat evaluates, jadi testnya akan gagal karena alasan salah.
+    // sebelum rules sempat dievaluasi, jadi testnya akan gagal karena alasan salah.
     const bad = [
       ['id saja, tanpa isi soal', { id: 'q_id_only', type: 'single', prompt: 'Tanpa opsi', points: 10 }],
       ['tipe tidak dikenal', cp2Snap({ type: 'mystery' })],
@@ -2368,110 +2629,298 @@ async function main() {
       ['prompt bukan string', cp2Snap({ prompt: 42 })],
       ['poin 0 untuk soal nyata', cp2Snap({ points: 0 })],
       ['poin melebihi batas', cp2Snap({ points: 101 })],
-      ['kunci di luar rentang opsi', cp2Snap({ answerIndex: 9 })],
-      ['entri unavailable menyamar sebagai soal utuh', cp2SnapUnavailable({ answerIndex: 0 })],
-      ['entri unavailable membawa kunci', cp2SnapUnavailable({ correctBoolean: true })],
+      // Tanpa `keyRevision`, server tidak tahu kunci mana yang dipakai.
+      ['tanpa keyRevision', { id: 'q_ok_shared', type: 'single', prompt: 'x', points: 10, options: ['A', 'B'] }],
+      ['keyRevision bukan angka', cp2Snap({ keyRevision: 'r1' })],
+      ['entri unavailable menyamar sebagai soal utuh', cp2SnapUnavailable({ available: true })],
+      ['entri unavailable membawa kunci', cp2SnapUnavailable({ answerIndex: 0 })],
       ['entri unavailable bukan 0 poin', cp2SnapUnavailable({ points: 10 })],
+      ['entri unavailable membawa options', cp2SnapUnavailable({ options: ['A', 'B'] })],
       ['soal nyata menyamar available:false', cp2Snap({ available: false })]
     ];
     for (const [i, [label, entry]] of bad.entries()) {
       // Label dibungkus ke dalam error supaya kegagalan tahu fixture mana yang
-      // bocor (hanya entri pertama yang divalidasi rules, jadi nomor indeks
-      // ikut ditulis agar tidak ambigu).
+      // bocor.
       try {
         await assertFails(
-          setDoc(doc(fsDb(alice), attemptPath(`at_snap_${i}`)), cp2Attempt({ questionSnapshot: [entry] }))
-        );
+          setDoc(doc(fsDb(alice), attemptPath(`at_snap_${i}`)), cp2Attempt({ questionSnapshot: [entry] })
+        ));
       } catch (err) {
         throw new Error(`[${i}] ${label}: ${err.message}`);
       }
     }
-    // (b) Bentuk yang valid DITERIMA, termasuk entri `unavailable` untuk soal
-    // yang sudah hilang sebelum attempt dimulai. `answers` harus selaras
-    // jumlah dengan `questionSnapshot` (satu entri per soal).
+    // Bentuk yang valid DITERIMA, termasuk entri `unavailable` untuk soal yang
+    // sudah hilang sebelum attempt dimulai.
     await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_snap_ok')),
       cp2Attempt({
         questionSnapshot: [cp2Snap(), cp2SnapUnavailable()],
-        answers: [cp2Answer(), cp2Answer({ questionId: 'q_hilang', isCorrect: null, needsManualGrade: true, pointsEarned: 0 })]
+        answers: [cp2Answer(), cp2Answer({ questionId: 'cp2q_hilang' })]
       })));
     // (c) Snapshot TIDAK BOLEH diubah user lain — partner maupun non-member.
     await assertFails(updateDoc(doc(fsDb(bob), attemptPath('at_snap_ok')),
-      { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+      { questionSnapshot: [cp2Snap({ prompt: 'revisi' })] }));
     await assertFails(updateDoc(doc(fsDb(carolCP3), attemptPath('at_snap_ok')),
-      { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+      { questionSnapshot: [cp2Snap({ prompt: 'revisi' })] }));
     // (d) Owners sendiri tidak boleh menyusun ulang snapshot (immutable).
     // CATATAN: nilai HARUS benar-benar berbeda — `changed()` tidak menghitung
     // key yang nilainya tidak berubah, jadi menulis nilai yang sama lolos
-    // sebagai no-op (lihat catatan similar di blok penilaian manual).
+    // sebagai no-op.
     await assertFails(updateDoc(doc(fsDb(alice), attemptPath('at_snap_ok')),
       { questionSnapshot: [cp2Snap({ prompt: 'Berapa 1 + 1? (revisi)' })] }));
   });
 
+  await it('CP2/ATTEMPT: score fields server-owned — client tidak boleh menulisnya', async () => {
+    const p = attemptPath('at_score');
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
+    // Klaim "nilai sempurna" harus ditolak,aunque nilainya terlihat benar.
+    // Inilah celah yang ditutup migrasi ini: sebelumnya owner bisa menulis
+    // skornya sendiri lalu menandai attempt selesai.
+    for (const [field, value] of [
+      ['score', 10],
+      ['maxScore', 10],
+      ['scorePercent', 100],
+      ['passed', true],
+      ['isAuthoritative', true],
+      ['gradedAt', new Date()],
+      ['scoreSource', 'server'],
+      ['answersHash', 'abc123'],
+      ['pendingManualCount', 0]
+    ]) {
+      await assertFails(updateDoc(doc(fsDb(alice), p), { [field]: value }));
+    }
+    // Tulisan gabungan "semua field nilai sekaligus" juga ditolak.
+    await assertFails(updateDoc(doc(fsDb(alice), p), {
+      score: 10, maxScore: 10, scorePercent: 100, passed: true,
+      isAuthoritative: true, scoreSource: 'server', gradedAt: new Date()
+    }));
+  });
+
+  await it('CP2/ATTEMPT: answers hanya boleh memuat jawaban peserta', async () => {
+    const p = attemptPath('at_answers');
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
+    // Menyimpan jawaban saat masih berjalan = ALLOW.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 2 })] }));
+    // Metadata penilaian TIDAK boleh ikut ditulis peserta.
+    //
+    // CATATAN: destrukturnya `[label, extra]`, BUKAN `[i, extra]` dari
+    // `.entries()`. Kalau `.entries()` dipakai, `extra` berisi ARRAY
+    // `[label, objek]`, jadi `...extra` menyetop jadi properti '0' dan '1' -
+    // field `isCorrect` dkk. sama sekali tidak pernah ditulis, dan setiap
+    // assertFails di bawah jadi lulus karena alasan yang salah.
+    for (const [label, extra] of [
+      ['isCorrect', { isCorrect: true }],
+      ['pointsEarned', { pointsEarned: 10 }],
+      ['needsManualGrade', { needsManualGrade: false }],
+      ['manualScore', { manualScore: 10 }],
+      ['gradedBy', { gradedBy: 'alice' }],
+      ['gradedAt', { gradedAt: new Date() }],
+      // `fraction` sengaja TIDAK pernah disimpan di answers[] (grading.js tidak
+      // menghasilkannya) — jadi tidak boleh ada.
+      ['fraction', { fraction: 1 }],
+      ['isAuthoritative', { isAuthoritative: true }]
+    ]) {
+      await assertFails(updateDoc(doc(fsDb(alice), p), {
+        answers: [cp2Answer({ userAnswer: 2, ...extra })]
+      }), label);
+    }
+    // Membawa kunci di dalam entri jawaban juga DENY.
+    await assertFails(updateDoc(doc(fsDb(alice), p), {
+      answers: [cp2Answer({ userAnswer: 2, correctIndices: [2] })]
+    }));
+  });
+
+  await it('CP2/ATTEMPT: transisi status — peserta hanya boleh in_progress → pending_grading', async () => {
+    const p = attemptPath('at_status');
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
+    // Tetap in_progress sambil menyimpan jawaban = ALLOW.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), { answers: [cp2Answer({ userAnswer: 2 })] }));
+    // Menyerahkan jawaban: set submittedAt + pending_grading = ALLOW.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
+      submittedAt: serverTimestamp(),
+      status: 'pending_grading'
+    }));
+    // Status akhir adalah keputusan server. Peserta tidak boleh menandainya
+    // sendiri, karena itu akan menampilkan hasil tanpa nilai.
+    for (const st of ['pending_manual_grade', 'graded', 'completed']) {
+      await assertFails(updateDoc(doc(fsDb(alice), p), { status: st }));
+    }
+    // pending_grading tanpa submittedAt = DENY (server tidak akan menilai).
+    await assertSucceeds(setDoc(doc(fsDb(alice), attemptPath('at_status2')), cp2Attempt()));
+    await assertFails(updateDoc(doc(fsDb(alice), attemptPath('at_status2')), { status: 'pending_grading' }));
+  });
+
+  // Attempt yang sudah DIKIRIM dengan satu soal manual. Perlu dua langkah:
+  // create selalu `in_progress`, lalu di-update ke `pending_grading` +
+  // `submittedAt` oleh pemiliknya. Status `pending_manual_grade` datang dari
+  // server (Functions), bukan dari client.
+  const seedSubmitted = async (path) => {
+    await assertSucceeds(setDoc(doc(fsDb(alice), path), cp2Attempt()));
+    await assertSucceeds(updateDoc(doc(fsDb(alice), path), {
+      submittedAt: serverTimestamp(),
+      status: 'pending_grading'
+    }));
+    // Simulasikan hasil Functions: attempt dengan satu soal manual + nilai
+    // otoritatif. Ditulis dengan rules off karena Admin SDK Producer nilai
+    // seperti inilah (melewati rules).
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), path), {
+        ...cp2Attempt(),
+        submittedAt: new Date(),
+        status: 'pending_manual_grade',
+        score: 0,
+        maxScore: 10,
+        scorePercent: 0,
+        passed: false,
+        isAuthoritative: false,
+        scoreSource: 'server',
+        gradedAt: new Date()
+      });
+    });
+  };
+
   await it('CP2/ATTEMPT: partner boleh nilai manual — hanya field manual', async () => {
     const p = attemptPath('at_manual');
-    await seedFinishedWithManual(p);
+    await seedSubmitted(p);
     // CATATAN: `serverTimestamp()` TIDAK boleh dipakai di dalam array — SDK
-    // menolaknya ("serverTimestamp() is not currently supported inside arrays").
-    // Karena `gradedAt` berada di dalam entri `answers`, test memakai timestamp
-    // konkret. Konsekuensi sama untuk kode produksi: `gradeAnswerManually`
-    // menulis `new Date()` untuk gradedAt, bukan serverTimestamp().
+    // menolaknya. Karena `gradedAt` berada di dalam entri `answers`, test memakai
+    // timestamp konkret. Konsekuensi sama untuk kode produksi.
     const withScore = [cp2Answer({
-      needsManualGrade: true, isCorrect: null, pointsEarned: 0,
       manualScore: 8, manualFeedback: 'Bagus', gradedBy: 'bob', gradedAt: new Date()
     })];
-    // Partner (anggota space) boleh menulis nilai manual.
+    // Partner (anggota space) boleh menulis nilai manual pada attempt terkirim.
     await assertSucceeds(updateDoc(doc(fsDb(bob), p), { answers: withScore }));
     // Non-member TIDAK boleh — bahkan pada field manual.
     await assertFails(updateDoc(doc(fsDb(carolCP3), p), { answers: withScore }));
-    // Partner tidak boleh menyentuh score/final-state.
+    // Partner tidak boleh menyentuh field skor otoritatif.
     await assertFails(updateDoc(doc(fsDb(bob), p), { score: 100 }));
-    await assertFails(updateDoc(doc(fsDb(bob), p), { questionSnapshot: [cp2Snap({ answerIndex: 3 })] }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { questionSnapshot: [cp2Snap({ prompt: 'x' })] }));
     // CATATAN: nilai yang TIDAK berubah tidak dihitung `changed()`, jadi untuk
     // membuktikan field terlarang selalu dikunci, nilai baru harus benar-benar
-    // berbeda dari yang tersimpan (mis. `maxScore: 10` memang sudah 10 sejak
-    // seed, jadi menulisnya lagi tidak melanggar apa pun).
+    // berbeda dari yang tersimpan.
     await assertFails(updateDoc(doc(fsDb(bob), p), { maxScore: 999 }));
     await assertFails(updateDoc(doc(fsDb(bob), p), { scorePercent: 100 }));
     await assertFails(updateDoc(doc(fsDb(bob), p), { passed: true }));
     await assertFails(updateDoc(doc(fsDb(bob), p), { status: 'graded' }));
-    await assertFails(updateDoc(doc(fsDb(bob), p), { completedAt: serverTimestamp() }));
-    // Owner boleh menutup attempt (mulai dari in_progress) tetapi TIDAK boleh
-    // mengubah `answers` setelah ditutup.
-    // Partner tidak boleh menyamarkan perubahan userAnswer / nilai otomatis di
-    // dalam array answers saat menulis nilai manual.
-    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
-      userAnswer: 99, needsManualGrade: true, isCorrect: null, pointsEarned: 0, manualScore: 10
-    })] }));
-    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
-      userAnswer: 1, isCorrect: false, pointsEarned: 10, needsManualGrade: true, manualScore: 10
-    })] }));
+    await assertFails(updateDoc(doc(fsDb(bob), p), { gradedAt: new Date() }));
+    // Partner tidak boleh menyamarkan perubahan `userAnswer` saat menulis nilai
+    // manual (jawaban peserta harus tetap sama).
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({ userAnswer: 99, manualScore: 10 })] }));
     // Jumlah array answers harus sama.
     await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [] }));
   });
 
-  await it('CP2/ATTEMPT: partner tidak boleh menilai attempt yang masih berjalan', async () => {
+  await it('CP2/ATTEMPT: partner tidak boleh menilai attempt yang belum dikirim', async () => {
     const p = attemptPath('at_baru');
-    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt({
-      answers: [cp2Answer({ needsManualGrade: true, isCorrect: null, pointsEarned: 0 })]
-    })));
-    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({
-      needsManualGrade: true, isCorrect: null, pointsEarned: 0, manualScore: 8
-    })] }));
+    await assertSucceeds(setDoc(doc(fsDb(alice), p), cp2Attempt()));
+    // Belum ada `submittedAt` → partner tidak boleh menilai.
+    await assertFails(updateDoc(doc(fsDb(bob), p), { answers: [cp2Answer({ manualScore: 8 })] }));
   });
 
-  await it('CP2/ATTEMPT: owner boleh finalisasi skor setelah nilai manual ada', async () => {
+  await it('CP2/ATTEMPT: owner TIDAK boleh finalisasi skor (server yang berwenang)', async () => {
     const p = attemptPath('at_final');
-    await seedFinishedWithManual(p);
-    // Recompute oleh owner: hanya field skor/status, TIDAK menyentuh answers —
-    // inilah yang menjaga nilai manual partner tidak tertimpa.
-    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
+    await seedSubmitted(p);
+    // DULUYA test ini mengizinkan owner menutup attempt dengan skor. Sekarang
+    // DENY: pemilik attempt tidak boleh menulis nilai, termasuk miliknya sendiri.
+    // Score/maxScore/scorePercent/passed/isAuthoritative semuanya milik server.
+    await assertFails(updateDoc(doc(fsDb(alice), p), {
       score: 8, maxScore: 10, scorePercent: 80, passed: true, status: 'graded'
     }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), { status: 'graded' }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), { status: 'completed' }));
     // Attempt adalah catatan historis: tidak boleh dihapus siapa pun.
     await assertFails(deleteDoc(doc(fsDb(alice), p)));
     await assertFails(deleteDoc(doc(fsDb(bob), p)));
   });
 
+  // ---------- legacy v2 ----------
+  //
+  // "Legacy v2 adalah kompatibilitas historis, BUKAN jalur pembuatan baru."
+  //
+  // Attempt v2 yang sudah terlanjur ada harus tetap bisa dibaca (dipakai untuk
+  // review hasil lama) dan boleh memakai aturan mainnya sendiri. Yang DITUTUP
+  // adalah pembuatan v2 baru: kalau masih bisa dibuat, peserta bisa memilih
+  // versi yang skornya ditulis client.
+  const v2AttemptData = (o = {}) => ({
+    uid: 'alice',
+    quizId: 'qu_cp2',
+    startedAt: serverTimestamp(),
+    completedAt: serverTimestamp(),
+    durationSeconds: 60,
+    questionSnapshot: [{
+      id: 'cp2q1',
+      type: 'single',
+      prompt: 'Berapa 1 + 1?',
+      points: 10,
+      options: ['1', '2', '3', '4'],
+      answerIndex: 1
+    }],
+    answers: [{
+      questionId: 'cp2q1',
+      userAnswer: 1,
+      isCorrect: true,
+      pointsEarned: 10,
+      needsManualGrade: false,
+      manualScore: null,
+      manualFeedback: '',
+      gradedBy: null,
+      gradedAt: null
+    }],
+    score: 10,
+    maxScore: 10,
+    scorePercent: 100,
+    passed: true,
+    status: 'completed',
+    schemaVersion: 2,
+    ...o
+  });
+
+  it('CP2/ATTEMPT v2: attempt legacy yang sudah ada tetap terbaca & bisa diubah', async () => {
+    // Disemai dengan rules off = meniru attempt v2 yang sudah terlanjur ada di
+    // production sebelum migrasi.
+    const p = attemptPath('at_legacy');
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), p), v2AttemptData());
+    });
+    // (1) READ: pemilik masih boleh membaca attempt lamanya.
+    await assertSucceeds(getDoc(doc(fsDb(alice), p)));
+    // Partner tetap tidak boleh — privasi attempt tidak berubah untuk data lama.
+    await assertFails(getDoc(doc(fsDb(bob), p)));
+    // (2) UPDATE: aturan v2 lama tetap berlaku (recompute oleh owner).
+    // `answers` terkunci karena status sudah `completed`.
+    await assertSucceeds(updateDoc(doc(fsDb(alice), p), {
+      score: 8, maxScore: 10, scorePercent: 80, passed: true
+    }));
+    await assertFails(updateDoc(doc(fsDb(alice), p), {
+      answers: [{
+        questionId: 'cp2q1', userAnswer: 3, isCorrect: true, pointsEarned: 10,
+        needsManualGrade: false, manualScore: null, manualFeedback: '',
+        gradedBy: null, gradedAt: null
+      }]
+    }));
+    // (3) Attempt legacy tetap tidak bisa dihapus.
+    await assertFails(deleteDoc(doc(fsDb(alice), p)));
+  });
+
+  it('CP2/ATTEMPT v2: attempt legacy TIDAK boleh dibuat lewat jalur create', async () => {
+    // Inilah yang menutup downgrade: peserta tidak bisa memilih versi lama
+    // untuk menulis skor sendiri.
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_v2_baru')), v2AttemptData()));
+    // schemaVersion 2 + snapshot berkunci = DENY (dua alasan sekaligus).
+    await assertFails(setDoc(doc(fsDb(alice), attemptPath('at_v2_baru2')),
+      v2AttemptData({ status: 'in_progress' })));
+    // Dan attempts dengan schemaVersion lain juga ditolak.
+    for (const sv of [1, 4]) {
+      await assertFails(setDoc(doc(fsDb(alice), attemptPath(`at_sv_${sv}`)),
+        cp2Attempt({ schemaVersion: sv })));
+    }
+    // Attempt v2 TIDAK boleh "naik kelas" jadi v3 lewat update: yang boleh
+    // di-update cuma mengikuti versi yang sudah tersimpan.
+    const p = attemptPath('at_v2_up');
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), p), v2AttemptData());
+    });
+    await assertFails(updateDoc(doc(fsDb(alice), p), { schemaVersion: 3 }));
+  });
   await testEnv.cleanup();
   console.log(failed === 0 ? `\nALL ${total} TESTS PASSED` : `\n${failed}/${total} TESTS FAILED`);
   process.exit(failed === 0 ? 0 : 1);

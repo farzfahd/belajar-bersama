@@ -22,9 +22,12 @@ import {
   answerFromState,
   assignPair,
   assignedRightIndex,
+  findDuplicateText,
+  hasMatchingKey,
   matchingCompletion,
   matchingStateForEditor,
   matchingStateFromAnswer,
+  matchingStateFromAnswerPools,
   removeSlot,
   serializePairDraft,
   serializePairs,
@@ -226,13 +229,25 @@ export function MatchingEditor({ pairs, pairDraft, onChange, disabled = false })
 
   const status = matchingCompletion(state);
   const canRemove = state.lefts.length > MATCHING_MIN_PAIRS;
+  // Peringatan langsung di editor: pasangan kembar tidak bisa disimpan, dan
+  // syaratnya baru ketahuan saat menyimpan kalau ditolak diam-diam. Baris
+  // kosong dilewati oleh `findDuplicateText`, jadi dua baris kosong bukan
+  // dianggap kembar.
+  const dupLeft = findDuplicateText(state.lefts);
+  const dupRight = findDuplicateText(state.rights);
+  const duplicate =
+    dupLeft !== null
+      ? `Item kiri "${dupLeft}" dipakai lebih dari sekali. Setiap item kiri harus unik.`
+      : dupRight !== null
+        ? `Item kanan "${dupRight}" dipakai lebih dari sekali. Setiap item kanan harus unik.`
+        : null;
 
   return (
     <div className="space-y-2">
       <MatchingShell
         leftTitle="Item Kiri"
         rightTitle="Item Kanan (kunci jawaban)"
-        hint="Ketik kedua kolom, lalu sambungkan: seret ikon panah ke kotak kiri, atau tekan Sambung lalu pilih item kanan. Satu item kanan hanya bisa dipakai satu kali."
+        hint="Ketik kedua kolom, lalu sambungkan: seret ikon panah ke kotak kiri, atau tekan Sambung lalu pilih item kanan. Satu item kanan hanya bisa dipakai satu kali, dan teksnya tidak boleh sama dengan baris lain."
         left={state.lefts.map((left, i) => {
           const rightIndex = assignedRightIndex(state, i);
           const connected = rightIndex !== -1;
@@ -341,7 +356,12 @@ export function MatchingEditor({ pairs, pairDraft, onChange, disabled = false })
         <IconPlus size={13} /> Tambah pasangan
       </button>
       {flow.notice && <StatusNote tone="warn">{flow.notice}</StatusNote>}
-      {status.connected >= MATCHING_MIN_PAIRS ? (
+      {duplicate ? (
+        <StatusNote tone="danger" title="Item kembar">
+          {duplicate} Soal belum bisa disimpan sampai barisnya diperbaiki — pasangan kembar membuat
+          kunci jawaban tidak bisa dinilai.
+        </StatusNote>
+      ) : status.connected >= MATCHING_MIN_PAIRS ? (
         <StatusNote tone="ok">
           {status.connected} pasangan tersambung dan siap disimpan.
           {status.total - status.connected > 0 && (
@@ -364,6 +384,8 @@ export function MatchingEditor({ pairs, pairDraft, onChange, disabled = false })
 
 export function MatchingAnswer({
   pairs,
+  left: leftPool,
+  right: rightPool,
   value,
   onChange,
   seed,
@@ -372,7 +394,19 @@ export function MatchingAnswer({
 }) {
   const flow = useConnectFlow();
   const clean = (Array.isArray(pairs) ? pairs : []).filter((p) => p?.left && p?.right);
-  const [state, setState] = useState(() => matchingStateFromAnswer(clean, value, seed));
+
+  // Dua sumber untuk state awal, dipilih berdasar'salah satu yang ADA:
+  //   - `pairs`  : attempt v2 / mode review. Pasangan sekaligus Answer key-nya.
+  //   - kolam    : attempt v3. Pasangan adalah kuncinya, jadi tidak ikut dikirim
+  //                ke peserta; yang ada cuma `matchLeft` + `matchRight`.
+  // Kalau keduanya ada, `pairs` menang supaya review attempt lama tidak berubah.
+  const fromPairs = clean.length > 0;
+  const initialState = () =>
+    fromPairs
+      ? matchingStateFromAnswer(clean, value, seed)
+      : matchingStateFromAnswerPools(leftPool, rightPool, value, seed);
+
+  const [state, setState] = useState(initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -381,7 +415,7 @@ export function MatchingAnswer({
   useEffect(() => {
     const incoming = JSON.stringify(value || {});
     if (incoming === JSON.stringify(answerFromState(stateRef.current))) return;
-    setState(matchingStateFromAnswer(clean, value, seed));
+    setState(initialState());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
@@ -393,6 +427,11 @@ export function MatchingAnswer({
   const status = matchingCompletion(state);
   const pending = status.total - status.connected;
   const correctMap = new Map((Array.isArray(pairs) ? pairs : []).map((p) => [p.left, p.right]));
+  // Tanpa kunci (entri v3) tidak ada yang bisa ditandai "Benar" atau "Belum
+  // tepat". Badge hanya muncul kalau kuncinya memang ada di dokumen — kalau
+  // tidak, mode review akan menuduh peserta salah atas kunci yang tidak pernah
+  // ada di layar.
+  const canShowOutcome = hasMatchingKey(pairs);
 
   return (
     <div className="space-y-2">
@@ -403,7 +442,7 @@ export function MatchingAnswer({
         left={state.lefts.map((left, i) => {
           const rightIndex = assignedRightIndex(state, i);
           const connected = rightIndex !== -1;
-          const correct = review && connectedMapHas(state, i, correctMap);
+          const correct = review && canShowOutcome && connectedMapHas(state, i, correctMap);
           return (
             <div
               key={`la-${i}`}
@@ -430,7 +469,7 @@ export function MatchingAnswer({
                   onClick={() => flow.selectLeft(i)}
                 />
               )}
-              {review && <ReviewBadge correct={correct} />}
+              {review && canShowOutcome && <ReviewBadge correct={correct} />}
             </div>
           );
         })}

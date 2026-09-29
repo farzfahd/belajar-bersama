@@ -2,14 +2,24 @@ export const SCHEMA_VERSION = 1;
 
 // Versi skema dokumen attempt (`quizzes/{quizId}/attempts/{attemptId}`).
 //
-// SENGAJA dipisah dari `SCHEMA_VERSION` dan naik ke 2: pada versi 1,
-// `questionSnapshot` hanya berisi array ID soal, sehingga attempt TIDAK
-// pernah freezes isi soal — soalnya masih dibaca live dari Question Bank.
-// Versi 2 = `questionSnapshot` memuat ISI LENGKAP tiap soal (prompt, opsi,
-// kunci jawaban, poin, penjelasan) yang disalin saat attempt dimulai.
-// Nol attempt versi 1 pernah ada di emulator saat skema ini diubah, jadi tidak
-// ada jalur kompatibilitas yang perlu dipertahankan.
-export const ATTEMPT_SCHEMA_VERSION = 2;
+// SENGAJA dipisah dari `SCHEMA_VERSION` dan naik sampai 3:
+//
+//   v1 — `questionSnapshot` hanya berisi array ID soal, sehingga attempt TIDAK
+//        pernah membekukan isi soal. Tidak pernah ada attempt-nya.
+//   v2 — `questionSnapshot` memuat ISI LENGKAP tiap soal, termasuk KUNCI
+//        JAWABAN, dan skornya ditulis client. Karena dokumen attempt dibaca
+//        pemiliknya sendiri, dan pemilik attempt adalah PESERTA, snapshot ini
+//        berarti participant menerima kunci jawabannya sendiri.
+//   v3 — `questionSnapshot` memuat HANYA material publik untuk menjawab (prompt,
+//        tipe, poin, opsi, teks kasus, kode awal, kolam kandidat) plus
+//        `keyRevision` yang dikunci. `answers` hanya `{questionId, userAnswer}`.
+//        Tidak ada nilai di dokumen sama sekali sampai server menilainya dari
+//        dokumen kunci privat. `firestore.rules` menolak pembuatan attempt
+//        yang bukan v3, jadi semua attempt baru otomatis aman.
+//
+// Attempt v2 yang sudah terlanjur tersimpan TETAP harus bisa dibaca dan
+// di-finalisasi pemiliknya, jadi jalur kodenya tidak dihapus.
+export const ATTEMPT_SCHEMA_VERSION = 3;
 
 export const ROOT = {
   users: 'users',

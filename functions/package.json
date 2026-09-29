@@ -1,0 +1,27 @@
+{
+  "name": "belajar-bersama-functions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Server-authoritative grading untuk Belajar Bersama (Assessment Security)",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "type": "module",
+  "scripts": {
+    "sync-grading": "node ../scripts/sync-grading.mjs",
+    "build": "npm run sync-grading && tsc",
+    "typecheck": "tsc --noEmit",
+    "predeploy": "npm run build",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "logs": "firebase functions:log",
+    "test": "node --test ../tests/functions/*.test.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

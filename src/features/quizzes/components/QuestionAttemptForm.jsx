@@ -7,6 +7,7 @@ import Badge from '../../../shared/ui/Badge';
 import Input from '../../../shared/ui/Input';
 import { QUESTION_TYPE_LABELS } from '../../../lib/constants';
 import { MatchingAnswer } from '../../questions/components/MatchingBoard';
+import OrderingAnswer from './OrderingAnswer';
 
 function OptionRow({ selected, onSelect, disabled, showKey, isKey, label }) {
   return (
@@ -60,6 +61,13 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
   };
   const options = Array.isArray(question.options) ? question.options : [];
 
+  // Mode review pada entri v3 TIDAK punya kunci sama sekali (snapshot v3 tidak
+  // menyalinnya). Tanpa penjaga di bawah, `Boolean(undefined) === false` akan
+  // cocok dengan opsi "Salah" dan menandainya sebagai kunci — participant
+  // dituduh salah atas kunci yang memang tidak pernah ada di layar.
+  // Jadi setiap penanda "Kunci" hanya boleh muncul kalau field kuncinya ADA.
+  const hasKeyOf = (field) => Object.prototype.hasOwnProperty.call(question, field);
+
   return (
     <div className="flex flex-col gap-3">
       <div className="eyebrow">{QUESTION_TYPE_LABELS[type] || type}</div>
@@ -75,7 +83,7 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
             onSelect={() => set(i)}
             disabled={disabled}
             showKey={review}
-            isKey={review && question.answerIndex === i}
+            isKey={review && hasKeyOf('answerIndex') && question.answerIndex === i}
           />
         ))}
 
@@ -92,7 +100,7 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
             onSelect={() => set(val)}
             disabled={disabled}
             showKey={review}
-            isKey={review && Boolean(question.correctBoolean) === val}
+            isKey={review && hasKeyOf('correctBoolean') && Boolean(question.correctBoolean) === val}
           />
         ))}
 
@@ -101,7 +109,7 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
         options.map((opt, i) => {
           const arr = Array.isArray(value) ? value : [];
           const on = arr.includes(i);
-          const isKey = review && (question.correctIndices || []).includes(i);
+          const isKey = review && hasKeyOf('correctIndices') && (question.correctIndices || []).includes(i);
           return (
             <label
               key={i}
@@ -135,7 +143,7 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
           onChange={(e) => set(e.target.value)}
           disabled={disabled}
           hint={
-            review && question.acceptedAnswers?.length
+            review && hasKeyOf('acceptedAnswers') && question.acceptedAnswers?.length
               ? `Jawaban diterima: ${question.acceptedAnswers.join(', ')}`
               : undefined
           }
@@ -156,10 +164,20 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
       {/* Tipe 6 - menjodohkan: peta { kiri: kanan }. Sambungan dibuat satu ke
           satu (ketuk/seret), bukan dropdown, jadi satu item kanan tidak bisa
           terpakai dua kali. Kolom kanan sudah diacak dan tidak ada penanda
-          benar/salah saat menjawab; hasil baru muncul di mode review. */}
+          benar/salah saat menjawab; hasil baru muncul di mode review.
+
+          Dua sumber, sesuai versi snapshot attempt-nya:
+            `pairs`        - v2, sekaligus kunci jawabannya (dipakai untuk review).
+            matchLeft/     - v3. `pairs` TIDAK ikut dikirim ke peserta, jadi state
+            matchRight       awal dibangun dari kedua kolam lewat
+                             `matchingStateFromAnswerPools`. Kalau hanya `pairs`
+                             yang diteruskan, entri v3 tampil dengan kolom kosong
+                             dan participant tidak bisa menjawab sama sekali. */}
       {type === 'matching' && (
         <MatchingAnswer
           pairs={question.pairs}
+          left={question.matchLeft}
+          right={question.matchRight}
           value={value}
           seed={question.id || question.questionId || 'q'}
           disabled={disabled}
@@ -168,20 +186,21 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
         />
       )}
 
-      {/* Tipe 7 — mengurutkan */}
+      {/* Tipe 7 - mengurutkan. Daftar item dibangun dari `orderItems` (himpunan
+          item, bukan urutan benar); `items` adalah kunci jawaban dan hanya
+          dipakai di mode review. Komponen anak `OrderingAnswer` yang
+          menangani pengacakan urutan awal, penyusunan jawaban, dan penilaian
+          review. Form ini tidak pernah memakai kunci sebagai fallback jawaban:
+          jawaban kosong tetap kosong (nilai 0). */}
       {type === 'ordering' && (
-        <ul className="flex flex-col gap-1.5">
-          {(Array.isArray(value) && value.length ? value : question.items || []).map((item, i) => (
-            <li
-              key={`${item}-${i}`}
-              className="flex items-center gap-3 rounded-smc border border-linestrong bg-bg2 px-3 py-2 text-[14px] text-ink"
-            >
-              <span className="font-mono text-[12px] text-dimmer">{i + 1}</span>
-              <span className="min-w-0 flex-1">{String(item)}</span>
-              {review && (question.items || [])[i] === item && <Badge tone="ok">Benar</Badge>}
-            </li>
-          ))}
-        </ul>
+        <OrderingAnswer
+          key={question?.id || 'ordering'}
+          question={question}
+          value={value}
+          onChange={(next) => set(next)}
+          review={review}
+          disabled={disabled}
+        />
       )}
 
       {/* Tipe 8 — numerik */}
@@ -193,7 +212,11 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
           value={value ?? ''}
           onChange={(e) => set(e.target.value === '' ? null : Number(e.target.value))}
           disabled={disabled}
-          hint={review ? `Nilai benar: ${question.correctValue}` : undefined}
+          hint={
+            review && hasKeyOf('correctValue') && question.correctValue !== null
+              ? `Nilai benar: ${question.correctValue}`
+              : undefined
+          }
         />
       )}
 
@@ -229,7 +252,7 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
                       disabled={disabled}
                       onSelect={() => set({ ...(value || {}), [idx]: i })}
                       showKey={review}
-                      isKey={review && sub.answerIndex === i}
+                      isKey={review && hasKeyOf('subQuestions') && sub.answerIndex === i}
                     />
                   ))}
                 {sub.type === 'boolean' &&
@@ -244,7 +267,9 @@ export default function QuestionAttemptForm({ question, value, onChange, review 
                       disabled={disabled}
                       onSelect={() => set({ ...(value || {}), [idx]: val })}
                       showKey={review}
-                      isKey={review && Boolean(sub.correctBoolean) === val}
+                      isKey={
+                        review && 'correctBoolean' in sub && Boolean(sub.correctBoolean) === val
+                      }
                     />
                   ))}
                 {sub.type === 'short_answer' && (

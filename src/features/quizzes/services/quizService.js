@@ -18,11 +18,15 @@ import {
 } from '../utils/quizSettings';
 import {
   ATTEMPT_STATUS,
-  buildAnswers,
-  buildQuestionSnapshot,
+  assertNotAuthorOfQuizQuestions,
+  buildAnswersV3,
+  buildQuestionSnapshotV3,
+  buildQuizKeyManifest,
   computeScore,
   indexSnapshot,
-  resolveAttemptStatus
+  isV3Attempt,
+  resolveAttemptStatus,
+  withManualScoreV3
 } from '../utils/attemptEngine';
 
 function attemptRef(spaceId, quizId, attemptId) {
@@ -128,12 +132,53 @@ export async function updateQuiz(spaceId, quizId, input) {
 }
 
 // Mengganti snapshot soal (tambah/hapus/reorder) tanpa menyentuh dokumen soal.
-export async function updateQuizQuestionIds(spaceId, quizId, questionIds) {
+//
+// `questionKeyRevisions` ikut ditulis di sini: kuis mengunci nomor revisi kunci
+// setiap soal yang masuk ke dalamnya, jadi attempt yang dimulai DI KEMUDIAN tetap
+// dinilai terhadap kunci versi yang sama walau kuncinya sudah direvisi.
+// Nilainya diambil dari dokumen soal publik (nomor revisi bersifat publik;
+// hanya ISI kuncinya yang privat), jadi tidak perlu membaca dokumen kunci.
+//
+// Dua sumber revision, dan itu bukan pengulangan:
+//   - `questions` yang sudah dipegang pemanggil (umumnya editor kuis, yang
+//     memang sudah memuat seluruh soal). Gratis.
+//   - dokumen soal yang BELUM ada di daftar itu. Ada satu kasus nyata: soal
+//     baru saja dibuat lewat "+ Soal Baru", lalu autosave pertamanya sudah
+//     selesai tetapi `useQuestions` belum menerima update snapshot-nya. Tanpa
+//     pembacaan tambahan, revisi soal itu akan hilang dari manifest — dan kuis
+//     akan diam-diam memakai kunci terbaru. Hanya id yang bermasalah yang
+//     dibaca, jadi biayanya sebanding dengan yang berubah.
+//
+// Revisi yang sudah tercatat pada kuis TIDAK pernah dihapus selama soalnya masih
+// ada di kuis. Kalau dokumen soal tiba-tiba tidak terbaca (mis. berubah jadi
+// private), lebih baik kuis memakai revisi yang sudah dikunci daripada kehilangan
+// pin dan ikut bergeser ke kunci terbaru.
+export async function updateQuizQuestionIds(spaceId, quizId, questionIds, questions) {
   requireUser();
-  await updateDoc(quizRef(spaceId, quizId), {
-    questionIds: normalizeQuestionIds(questionIds),
-    updatedAt: serverTimestamp()
-  });
+  const ids = normalizeQuestionIds(questionIds);
+  const patch = { questionIds: ids, updatedAt: serverTimestamp() };
+
+  const previous = await getQuiz(spaceId, quizId);
+  const known = questionByIdMap(questions);
+  const unread = ids.filter((id) => !known[id]);
+  if (unread.length > 0) {
+    const snaps = await Promise.all(
+      unread.map((id) => getDoc(doc(db, ROOT.spaces, spaceId, COL.questions, id)))
+    );
+    for (const snap of snaps) {
+      if (snap.exists()) known[snap.id] = snap.data();
+    }
+  }
+
+  const manifest = buildQuizKeyManifest(ids, known);
+  // Pin lama dipertahankan untuk soal yang revisinya tidak bisa dibaca ulang.
+  for (const [id, rev] of Object.entries(previous?.questionKeyRevisions || {})) {
+    if (ids.includes(id) && !manifest[id]) manifest[id] = rev;
+  }
+  if (Object.keys(manifest).length > 0) {
+    patch.questionKeyRevisions = manifest;
+  }
+  await updateDoc(quizRef(spaceId, quizId), patch);
 }
 
 export async function getQuiz(spaceId, quizId) {
@@ -155,24 +200,55 @@ export async function getQuizzes(spaceId) {
 // ===================================================================
 // ATTEMPT ENGINE (CP2) — alur pengerjaan kuis.
 //
-// CATATAN KEAMANAN: skor dihitung di CLIENT (`computeScore`). Ini bukan
-// mekanisme anti-tampering setara trusted server-side grading; yang dijaga
-// rules hanya field struktural (lihat blok `attempts` di firestore.rules).
+// DUA VERSI SEKALIGUS, bukan salah satu:
+//
+//   v3 (BARU) — snapshot tanpa kunci, `answers` hanya `{questionId, userAnswer}`,
+//               skor TIDAK ditulis client, status `pending_grading` setelah
+//               submit. Ini jalur yang dipakai `startAttempt` sekarang.
+//   v2 (LAMA) — snapshot menyalin kunci, `answers` menyimpan nilai, skor ditulis
+//               client. Fungsi-fungsinya TETAP ADA karena attempt v2 yang sudah
+//               tersimpan masih harus bisa dibaca dan di-finalisasi pemiliknya.
+//
+// CATATAN KEAMANAN: pada v2, skor dihitung di CLIENT (`computeScore`). Itu bukan
+// mekanisme anti-tampering setara trusted server-side grading; yang dijaga rules
+// hanya field struktural (lihat blok `attempts` di firestore.rules). Pada v3
+// masalah ini hilang: client tidak punya kunci dan tidak menulis nilai apa pun ke
+// dokumen attempt.
 // ===================================================================
 
 /**
- * Memulai attempt baru: `questionSnapshot` memuat SELURUH soal kuis (jumlah
- * soal = panjang `questionIds`), dan satu entri `answers` per soal dengan
- * `userAnswer: null`.
+ * Memulai attempt baru — SELALU versi 3.
+ *
+ * Yang ditulis ke Firestore sengaja dibuat MINIMAL:
+ *   uid, quizId, startedAt, questionSnapshot, answers, status, schemaVersion
+ *
+ * Tidak ada `score`/`maxScore`/`scorePercent`/`passed`. Field-field itu milik
+ * server (`serverOwnedScoreFields` di rules) dan tidak boleh diisi client; di v2
+ * `startAttempt` pernah menulis `score: 0` yang membuat attempt terlihat "nol"
+ * selama menunggu penilaian — sekarang keadaan itu direpresentasikan dengan
+ * field nilai yang memang belum ada.
+ *
  * @returns {string} attemptId
  */
 export async function startAttempt(spaceId, quizId, quiz, questions) {
   const uid = requireUser();
-  // Snapshot = SALINAN ISI SOAL saat attempt dimulai. `questions` hanya
-  // dibutuhkan di baris ini; tidak ada lagi pembacaan Question Bank
-  // untuk attempt ini setelah dokumen tersimpan.
-  const questionSnapshot = buildQuestionSnapshot(quiz, questionByIdMap(questions));
-  const answers = buildAnswers(questionSnapshot, {});
+  const byId = questionByIdMap(questions);
+
+  // P2: penulis soal tidak boleh mengerjakan kuis yang memuat soal sendiri.
+  // Dicek penuh di client supaya pesannya jelas; rules tetap memeriksa 8 soal
+  // pertama sebagai jaring pengaman.
+  assertNotAuthorOfQuizQuestions(uid, quiz, byId);
+
+  // Snapshot = SALINAN TANPA KUNCI + nomor revisi kunci yang dikunci untuk
+  // attempt ini. `questions` hanya dibutuhkan di baris ini; setelah dokumen
+  // tersimpan tidak ada lagi pembacaan Question Bank untuk attempt ini.
+  const questionSnapshot = buildQuestionSnapshotV3(
+    quiz,
+    byId,
+    uid,
+    quiz?.questionKeyRevisions
+  );
+  const answers = buildAnswersV3(questionSnapshot, {});
   const ref = doc(attemptsCol(spaceId, quizId));
 
   await setDoc(ref, {
@@ -183,10 +259,6 @@ export async function startAttempt(spaceId, quizId, quiz, questions) {
     durationSeconds: null,
     questionSnapshot,
     answers,
-    score: 0,
-    maxScore: 0,
-    scorePercent: 0,
-    passed: false,
     status: ATTEMPT_STATUS.inProgress,
     schemaVersion: ATTEMPT_SCHEMA_VERSION
   });
@@ -196,6 +268,10 @@ export async function startAttempt(spaceId, quizId, quiz, questions) {
 /**
  * Autosave jawaban sementara selama attempt masih `in_progress`.
  * Array `answers` ditulis utuh (Firestore tak mendukung update field di array).
+ *
+ * Bentuk entri answers tidak boleh berubah: v3 hanya boleh `{questionId,
+ * userAnswer}` dan v2 boleh punya field nilai. Penyerahan jawaban di bawah sudah
+ * memanggil `buildAnswersV3`/`buildAnswers` sesuai versinya.
  */
 export async function saveAttemptDraft(spaceId, quizId, attemptId, answers) {
   requireUser();
@@ -203,18 +279,32 @@ export async function saveAttemptDraft(spaceId, quizId, attemptId, answers) {
 }
 
 /**
- * Menutup attempt: nilai ulang jawaban, simpan skor, dan tentukan status
- * `completed` atau `pending_manual_grade`.
+ * Menutup attempt.
  *
- * Penilaian memakai KUNCI JAWABAN DARI SNAPSHOT (`attempt`), bukan dari Question
- * Bank. Jadi kalau soalnya sudah diedit/dihapus setelah attempt dimulai, skor
- * attempt ini tetap memakai versi soal yang benar-benar dikerjakan.
+ * v3 (jalur baru): answers diserahkan apa adanya, TANPA penilaian apa pun di
+ * client. Status jadi `pending_grading` sambil memasang `submittedAt` — dua
+ * hal itu hacerlo berpasangan karena `attemptOwnerStatusOk` di rules menolak
+ * `pending_grading` tanpa `submittedAt`. Skor muncul setelah server menilainya;
+ * sampai itu terjadi dokumen memang tidak punya field nilai.
  *
- * `previousAnswers` dipakai agar `manualScore` yang sudah ada tidak hilang
- * (mis. saat mengulang submit karena auto-submit timer).
+ * v2 (jalur lama): seperti sebelumnya — nilai ulang jawaban dari snapshot,
+ * simpan skor, tentukan status. Hanya dipakai untuk attempt v2 yang sudah
+ * ada, karena `create` di rules sudah menutup pembuatan attempt v2 baru.
  */
 export async function submitAttempt(spaceId, quizId, attemptId, answers, attempt, passingScorePercent, previousAnswers, durationSeconds) {
   requireUser();
+  const duration = Number.isFinite(durationSeconds) ? durationSeconds : null;
+
+  if (isV3Attempt(attempt)) {
+    await updateDoc(attemptRef(spaceId, quizId, attemptId), {
+      answers,
+      status: ATTEMPT_STATUS.pendingGrading,
+      submittedAt: serverTimestamp(),
+      durationSeconds: duration
+    });
+    return { score: null, maxScore: null, scorePercent: null, pending: true };
+  }
+
   const byId = snapshotMap(attempt);
   const merged = preserveManualScores(answers, previousAnswers);
   const { score, maxScore, scorePercent, pending } = computeScore(merged, byId);
@@ -227,7 +317,7 @@ export async function submitAttempt(spaceId, quizId, attemptId, answers, attempt
     passed: scorePercent >= (Number(passingScorePercent) || 0),
     status: resolveAttemptStatus(merged),
     completedAt: serverTimestamp(),
-    durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null
+    durationSeconds: duration
   });
   return { score, maxScore, scorePercent, pending };
 }
@@ -235,12 +325,23 @@ export async function submitAttempt(spaceId, quizId, attemptId, answers, attempt
 /**
  * Recompute skor oleh PEMILIK setelah nilai manual tersedia.
  *
- * PENTING (race condition): fungsi ini TIDAK menulis `answers`, hanya field
- * skor. Jadi ketika partner baru saja menulis nilai manual lalu owner menekan
- * "Finalisasi", nilai manual partner tetap utuh dan tidak tertimpa.
+ * KHUSUS ATTEMPT v2 (LAMA). Pada v3 fungsi ini tidak boleh jalan: `score`,
+ * `maxScore`, `scorePercent`, `passed` ada di `serverOwnedScoreFields`, dan rules
+ * menolak owner yang mengubahnya (`changed().hasAny(...) == false`). Nilai v3
+ * dihitung server dari dokumen kunci privat; pemilik tidak punya kunci itu, jadi
+ * tidak ada yang bisa ia hitung sendiri.
+ *
+ * PENTING (race condition, jalur v2): fungsi ini TIDAK menulis `answers`, hanya
+ * field skor. Jadi ketika partner baru saja menulis nilai manual lalu owner
+ * menekan "Finalisasi", nilai manual partner tetap utuh dan tidak tertimpa.
  */
 export async function finalizeAttempt(spaceId, quizId, attemptId, currentAnswers, attempt, passingScorePercent) {
   requireUser();
+  if (isV3Attempt(attempt)) {
+    throw new Error(
+      'Nilai attempt ini dihitung otomatis oleh server dari kunci soal, jadi tidak bisa difinalisasi manual.'
+    );
+  }
   const byId = snapshotMap(attempt);
   const { score, maxScore, scorePercent } = computeScore(currentAnswers, byId);
 
@@ -257,26 +358,41 @@ export async function finalizeAttempt(spaceId, quizId, attemptId, currentAnswers
 /**
  * Mengisi nilai manual satu soal (oleh partner, atau pemilik sendiri).
  *
- * Array `answers` ditulis ulang karena Firestore tidak mendukung update field
- * di dalam array. `questionId`/`userAnswer`/`pointsEarned`/`isCorrect`/
- * `needsManualGrade` pada entri tujuan TIDAK diubah — `answerEntryStable` di
- * rules memverifikasi hal yang sama di sisi server.
+ * Dua jalur, karena bentuk entri jawaban berbeda:
+ *   v3 — entri hanya boleh berisi `questionId`, `userAnswer`, dan metadata nilai
+ *        manual (`partnerAnswerEntryOk` memakai `hasOnly`). Contoh entri v3 yang
+ *        ikut disalin apa adanya akan ditolak rules.
+ *   v2 — pertahankan apa adanya; hanya entri tujuan yang ditambah `manualScore`.
+ *
+ * Keduanya TIDAK boleh mengubah `userAnswer`/`questionId`; `answerEntryStableV3`
+ * memverifikasi hal yang sama di sisi server.
  */
-export async function gradeAnswerManually(spaceId, quizId, attemptId, answers, questionId, manualScore, manualFeedback) {
+export async function gradeAnswerManually(spaceId, quizId, attemptId, answers, questionId, manualScore, manualFeedback, attempt) {
   const uid = requireUser();
+  // CATATAN: `gradedAt` berada DI DALAM array `answers`, dan Firestore SDK
+  // menolak `serverTimestamp()` di dalam array ("serverTimestamp() is not
+  // currently supported inside arrays"). Karena itu dipakai `new Date()` —
+  // waktu yang tercatat berasal dari client, bukan waktu server. Rules tetap
+  // memvalidasinya sebagai `timestamp`.
+  const gradedAt = new Date();
+  const feedback = String(manualFeedback ?? '').trim().slice(0, 2000);
+  const score = Math.max(0, Number(manualScore) || 0);
+
+  if (isV3Attempt(attempt)) {
+    await updateDoc(attemptRef(spaceId, quizId, attemptId), {
+      answers: withManualScoreV3(answers, questionId, score, feedback, uid, gradedAt)
+    });
+    return;
+  }
+
   const next = (Array.isArray(answers) ? answers : []).map((a) => {
     if (a.questionId !== questionId) return a;
     return {
       ...a,
-      manualScore: Math.max(0, Number(manualScore) || 0),
-      manualFeedback: String(manualFeedback ?? '').trim().slice(0, 2000),
+      manualScore: score,
+      manualFeedback: feedback,
       gradedBy: uid,
-      // CATATAN: `gradedAt` berada DI DALAM array `answers`, dan Firestore SDK
-      // menolak `serverTimestamp()` di dalam array ("serverTimestamp() is not
-      // currently supported inside arrays"). Karena itu dipakai `new Date()` —
-      // waktu yang tercatat berasal dari client, bukan waktu server. Rules tetap
-      // memvalidasinya sebagai `timestamp`.
-      gradedAt: new Date()
+      gradedAt
     };
   });
   await updateDoc(attemptRef(spaceId, quizId, attemptId), { answers: next });

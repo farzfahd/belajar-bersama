@@ -1,0 +1,130 @@
+{
+  "manifest": "assessment-security-migration-preflight",
+  "version": 1,
+  "recordedAtUtc": "2026-09-29T11:41:01Z",
+  "recordedBy": "assessment-security-migration (M0 pre-flight, read-only)",
+  "git": {
+    "head": "b6cecadbcc0d394a4d01bf264f976281ef48ad85",
+    "headShort": "b6cecad",
+    "branch": "main",
+    "lastCommits": ["b6cecad Update project", "d60e76f Update project", "a78ada4 feat: UI hardening, dashboard redesign, custom SVG icon system"],
+    "cleanWorkingTree": false,
+    "preExistingModified": ["docs/PROGRESS.md"],
+    "preExistingUntracked": ["tests/grading-qa-e2e.mjs"],
+    "fase2Modified": [
+      "package.json",
+      "src/features/questions/components/MatchingBoard.jsx",
+      "src/features/questions/components/QuestionFormModal.jsx",
+      "src/features/questions/services/questionService.js",
+      "src/features/questions/utils/matchingPairs.js",
+      "src/features/questions/utils/questionTypeFields.js",
+      "src/features/quizzes/components/QuestionAttemptForm.jsx",
+      "tests/grading.test.mjs",
+      "tests/matching-pairs.test.mjs",
+      "tests/question-card.test.mjs",
+      "tests/question-types.test.mjs"
+    ],
+    "fase2Untracked": [
+      "src/features/questions/utils/orderingAnswer.js",
+      "src/features/quizzes/components/OrderingAnswer.jsx",
+      "tests/ordering-answer.test.mjs"
+    ]
+  },
+  "toolchain": {
+    "node": "v24.18.0",
+    "npm": "11.16.0",
+    "packageManager": "npm (package-lock.json present)",
+    "firebaseCli": "13.35.1 (via local devDependency firebase-tools; no global install)"
+  },
+  "firebase": {
+    "defaultProject": "demo-learning-berdua",
+    "productionProject": "belajar-bersama-prod",
+    "projectNumber": "1074450838126",
+    "firebasercTargets": {},
+    "cloudFunctionsApi": {
+      "state": "SERVICE_DISABLED",
+      "evidence": "GET https://cloudfunctions.googleapis.com/v1/projects/belajar-bersama-prod/locations/-/functions -> HTTP 403 SERVICE_DISABLED",
+      "consequence": "Cloud Functions CANNOT be deployed to production right now. Deployment is blocked externally."
+    },
+    "billing": {
+      "state": "UNKNOWN",
+      "evidence": "gcloud CLI absent; Firebase CLI exposes no billing:list command",
+      "consequence": "Cannot confirm Blaze. Treated as NOT confirmed; nothing billing-related was modified."
+    },
+    "firestoreRulesDeployed": {
+      "rulesetId": "b1aa56f6-faf0-41aa-acbc-bf40f10e2c6d",
+      "source": "docs/PROGRESS.md entry 2026-09-28",
+      "note": "CLI has no rulesets:list command; value taken from the documented production deploy. Not re-verified against the live API in this run."
+    },
+    "functionsDeployed": {
+      "count": 0,
+      "note": "API disabled, so no Functions can exist. Repo had no functions/ directory before this migration."
+    }
+  },
+  "application": {
+    "schemaVersion": 1,
+    "attemptSchemaVersionBefore": 2,
+    "attemptSchemaVersionAfter": 3,
+    "questionTypes": 10,
+    "subQuestionTypes": ["single", "multiple", "boolean", "short_answer", "matching", "ordering", "numerical"],
+    "manualGradeTypes": ["essay", "code"],
+    "pgkGamma": 0.75,
+    "memberCap": 2,
+    "offlineCache": "persistentLocalCache + persistentMultipleTabManager in production"
+  },
+  "ci": {
+    "workflows": [".github/workflows/deploy-pages.yml"],
+    "deployPagesJobs": ["npm ci", "npm run build"],
+    "deploysFirestoreRules": false,
+    "deploysFunctions": false,
+    "note": "Confirmed gap that caused the 2026-09-28 production rules drift incident."
+  },
+  "env": {
+    "files": [".env", ".env.development.local", ".env.example", ".env.production.local"],
+    "keysReferenced": [
+      "VITE_FIREBASE_API_KEY",
+      "VITE_FIREBASE_AUTH_DOMAIN",
+      "VITE_FIREBASE_PROJECT_ID",
+      "VITE_FIREBASE_APP_ID",
+      "VITE_FIREBASE_MESSAGING_SENDER_ID",
+      "VITE_FIREBASE_STORAGE_BUCKET",
+      "VITE_RECAPTCHA_SITE_KEY",
+      "VITE_RECAPTCHA_PROVIDER",
+      "VITE_APPCHECK_DEBUG_TOKEN",
+      "VITE_ROUTER_BASENAME",
+      "VITE_USE_EMULATORS"
+    ],
+    "valuesRead": false,
+    "note": "Only key NAMES were read. No secret value was read, logged, or copied."
+  },
+  "tests": {
+    "runner": "node --test",
+    "unitCommand": "npm run test:units",
+    "rulesCommand": "npm run test:rules (needs emulator; requires Port 8080 free)",
+    "unitCountBefore": 389,
+    "unitResultBefore": "389 pass / 0 fail",
+    "buildBefore": "PASS (chunk >500kB warning is pre-existing)",
+    "emulatorExportPresent": false,
+    "emulatorRunning": false
+  },
+  "featureFlags": {
+    "note": "No feature-flag mechanism existed in the client before this migration.",
+    "addedBy": "assessment-security-migration (M1-M4) for safe dual-read rollout"
+  },
+  "blockers": [
+    {
+      "id": "B1",
+      "severity": "external",
+      "summary": "Cloud Functions API disabled on belajar-bersama-prod",
+      "actionRequired": "Enable Cloud Functions API in Google Cloud Console, and confirm Blaze billing is active, before deploying functions.",
+      "bypassable": false
+    },
+    {
+      "id": "B2",
+      "severity": "external",
+      "summary": "Blaze billing status cannot be verified from this environment",
+      "actionRequired": "Confirm billing plan in Firebase Console. Nothing was changed to work around it.",
+      "bypassable": false
+    }
+  ]
+}

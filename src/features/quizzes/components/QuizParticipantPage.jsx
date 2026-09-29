@@ -14,7 +14,12 @@ import { useAuthState } from '../../auth/hooks/useAuthState';
 import { useSpaceId } from '../../space/SpaceContext';
 import { useTopics } from '../../topics/hooks/useTopics';
 import { useAttempts } from '../hooks/useQuizzes';
-import { ATTEMPT_STATUS, canStartNewAttempt, findInProgress } from '../utils/attemptEngine';
+import {
+  ATTEMPT_STATUS,
+  attemptScoreLabel,
+  canStartNewAttempt,
+  findInProgress
+} from '../utils/attemptEngine';
 import { timeAgo } from '../../../shared/utils/time';
 
 const SHOW_ANSWER_LABEL = {
@@ -142,7 +147,7 @@ export default function QuizParticipantPage({ quiz: quizProp }) {
                         ? 'Sedang berjalan'
                         : a.status === ATTEMPT_STATUS.pendingManualGrade
                           ? 'Menunggu penilaian'
-                          : `${a.scorePercent}%`}
+                          : attemptScoreLabel(a)}
                     </span>
                     <span className="block text-[12px] text-dimmer">
                       {timeAgo(a.startedAt)}
@@ -155,7 +160,8 @@ export default function QuizParticipantPage({ quiz: quizProp }) {
                       tone={
                         a.status === ATTEMPT_STATUS.inProgress
                           ? 'accent'
-                          : a.status === ATTEMPT_STATUS.pendingManualGrade
+                          : a.status === ATTEMPT_STATUS.pendingManualGrade ||
+                              a.status === ATTEMPT_STATUS.pendingGrading
                             ? 'warn'
                             : 'dim'
                       }
@@ -164,7 +170,9 @@ export default function QuizParticipantPage({ quiz: quizProp }) {
                         ? 'Berjalan'
                         : a.status === ATTEMPT_STATUS.pendingManualGrade
                           ? 'Menunggu nilai'
-                          : 'Selesai'}
+                          : a.status === ATTEMPT_STATUS.pendingGrading
+                            ? 'Menunggu penilaian'
+                            : 'Selesai'}
                     </Badge>
                   </span>
                 </button>

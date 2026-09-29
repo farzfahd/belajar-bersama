@@ -55,6 +55,30 @@ export function seedFromText(text) {
   return h >>> 0;
 }
 
+/**
+ * Teks pertama yang muncul lebih dari sekali, atau `null` kalau semua unik.
+ *
+ * Dipakai dua tempat sekaligus supaya aturan "teks kiri & kanan harus unik"
+ * hanya ada di satu definisi: validasi sebelum menyimpan
+ * (`questionTypeFields.requirePairs`) dan peringatan langsung di editor
+ * (`MatchingEditor`).
+ *
+ * Teks kosong DILEWATI: baris kosong di editor adalah tempat mengetik baru,
+ * bukan pasangan yang kembar, jadi tidak boleh dilaporkan sebagai duplikat.
+ * Perbandingan memakai teks yang sudah di-trim supaya "A" dan "A " dianggap
+ * sama.
+ */
+export function findDuplicateText(values) {
+  const seen = new Set();
+  for (const raw of Array.isArray(values) ? values : []) {
+    const text = textOf(raw).trim();
+    if (!text) continue;
+    if (seen.has(text)) return text;
+    seen.add(text);
+  }
+  return null;
+}
+
 /** Fisher-Yates dengan seed: hasil sama untuk input sama, bukan random murni. */
 export function shuffleWithSeed(items, seed) {
   const out = Array.isArray(items) ? items.slice() : [];
@@ -153,15 +177,52 @@ export function isValidPairDraft(pairDraft) {
  */
 export function matchingStateFromAnswer(pairs, answer, seed) {
   const clean = cleanPairs(pairs);
-  const lefts = clean.map((p) => p.left);
-  const rightValues = shuffleWithSeed(clean.map((p) => p.right), seedFromText(seed));
-  const assigned = lefts.map((left) => {
+  return matchingStateFromAnswerPools(
+    clean.map((p) => p.left),
+    clean.map((p) => p.right),
+    answer,
+    seed
+  );
+}
+
+/**
+ * State awal dari DUA KOLAM KANDIDAT, bukan dari pasangan.
+ *
+ * Dipakai untuk entri snapshot attempt v3, yang tidak memuat `pairs` sama sekali
+ * (pasangan itulah kuncinya). Snapshot hanya membawa `matchLeft` dan
+ * `matchRight`, jadi bentuk kuncinya harus dibangun ulang dari kolam: kolom kiri
+ * berurutan, kolom kanan diacak dengan seed yang sama seperti v2.
+ *
+ * Perilakunya harus identik dengan `matchingStateFromAnswer` untuk pasangan yang
+ * sama, supaya attempt lama dan baru tidak terasa berbeda oleh peserta.
+ */
+export function matchingStateFromAnswerPools(lefts, rights, answer, seed) {
+  const cleanLefts = (Array.isArray(lefts) ? lefts : [])
+    .map((v) => textOf(v).trim())
+    .filter(Boolean);
+  const cleanRights = (Array.isArray(rights) ? rights : [])
+    .map((v) => textOf(v).trim())
+    .filter(Boolean);
+  const rightValues = shuffleWithSeed(cleanRights, seedFromText(seed));
+  const assigned = cleanLefts.map((left) => {
     const chosen = textOf(answer?.[left]).trim();
     if (!chosen) return null;
     const idx = rightValues.indexOf(chosen);
     return idx === -1 ? null : idx;
   });
-  return { lefts, rights: rightValues, assigned };
+  return { lefts: cleanLefts, rights: rightValues, assigned };
+}
+
+/**
+ * Apakah dokumen soal masih memuat pasangan sebagai kunci jawaban.
+ *
+ * Entri v3 menjawab `false`: isinya cuma kolam kandidat, jadi tidak ada yang
+ * boleh ditampilkan sebagai "benar" di mode review. Tanpa pemeriksaan ini, mode
+ * review akan menandai SETIAP baris "Belum tepat" — itu menuduh peserta salah
+ * atas kunci yang memang tidak ada di layar.
+ */
+export function hasMatchingKey(pairs) {
+  return (Array.isArray(pairs) ? pairs : []).filter((p) => p?.left && p?.right).length > 0;
 }
 
 function withAssigned(state, assigned) {

@@ -6,6 +6,7 @@ import Badge from '../../../shared/ui/Badge';
 import EmptyState from '../../../shared/ui/EmptyState';
 import { QUESTION_REPORT_TYPE_LABELS, QUESTION_TYPE_LABELS } from '../../../lib/constants';
 import { gradeQuestionAnswer } from '../utils/grading';
+import { mergeKeyIntoQuestion } from '../utils/keyView';
 import { useQuestionReports } from '../hooks/useQuestionReports';
 import { timeAgo } from '../../../shared/utils/time';
 
@@ -13,6 +14,7 @@ export default function QuestionDetailModal({
   open,
   spaceId,
   question,
+  questionKey = null,
   isOwner,
   onReport,
   onClose
@@ -32,11 +34,32 @@ export default function QuestionDetailModal({
 
   if (!question) return null;
 
+  // KUNCI DATANG DARI DOKUMEN TERPISAH, DAN HANYA UNTUK PEMILIK SOAL.
+  //
+  // `questions/{qid}` tidak lagi memuat field kunci; kuncinya ada di
+  // `questions/{qid}/key/{rev}` yang rules tolak untuk partner (policy P2).
+  // Maka `questionKey` bernilai `null` untuk partner BUKAN kegagalan muat —
+  // memang tidak ada hak untuk membacanya. Menggabungkan kunci ke objek
+  // tampilan di sini (bukan memodifikasi `question`) membuat batasannya jelas:
+  // satu objek tampilan, dua sumber data, dan `question` asli tetap bersih
+  // untuk payload laporan.
+  // `view` = objek soal untuk ditampilkan/ditilaian. Untuk pemilik, sisi kunci
+  // disatukan ke sisi publik oleh `mergeKeyIntoQuestion`, yang mengambil HANYA
+  // field kunci milik tipenya. Itu penting: dokumen kunci juga membawa
+  // `createdAt`, `schemaVersion`, dan `keyRevision` milik dirinya sendiri, dan
+  // menimpanya ke `question` akan membuat metadata soal ikut berubah hanya
+  // karena modal ini dibuka.
+  const view = mergeKeyIntoQuestion(question, isOwner ? questionKey : null);
+  // Partner tidak pernah melihat tab kunci. Menyembunyikannya sepenuhnya lebih
+  // aman daripada menampilkannya kosong, karena yang kosong bisa disalahartikan
+  // sebagai "soal ini belum punya kunci".
+  const activeTab = !isOwner && tab === 'key' ? 'preview' : tab;
+
   const type = question.type || 'single';
   const typeLabel = QUESTION_TYPE_LABELS[type] || 'Pilihan Ganda';
 
   const handleGrade = () => {
-    const res = gradeQuestionAnswer(question, userAnswer);
+    const res = gradeQuestionAnswer(view, userAnswer);
     setGradingResult(res);
   };
 
@@ -64,19 +87,24 @@ export default function QuestionDetailModal({
             }`}
             onClick={() => setTab('preview')}
           >
-            <span className="inline-flex items-center gap-1.5"><IconPlay size={15} /> Simulasi Pengerja</span>
+            <span className="inline-flex items-center gap-1.5"><IconPlay size={15} /> {isOwner ? 'Simulasi Pengerja' : 'Tampilan Soal'}</span>
           </button>
-          <button
-            type="button"
-            className={`pb-2 transition-colors ${
-              tab === 'key'
-                ? 'border-b-2 border-accent text-accent font-semibold'
-                : 'text-dim hover:text-ink'
-            }`}
-            onClick={() => setTab('key')}
-          >
-            <span className="inline-flex items-center gap-1.5"><IconKey size={15} /> Kunci Jawaban & Pembahasan</span>
-          </button>
+          {/* Tab kunci hanya untuk pemilik soal — partner memang tidak punya
+              hak membacanya (policy P2), jadi tombolnya tidak dirender sama
+              sekali, bukan hanya dinonaktifkan. */}
+          {isOwner && (
+            <button
+              type="button"
+              className={`pb-2 transition-colors ${
+                tab === 'key'
+                  ? 'border-b-2 border-accent text-accent font-semibold'
+                  : 'text-dim hover:text-ink'
+              }`}
+              onClick={() => setTab('key')}
+            >
+              <span className="inline-flex items-center gap-1.5"><IconKey size={15} /> Kunci Jawaban & Pembahasan</span>
+            </button>
+          )}
           <button
             type="button"
             className={`pb-2 transition-colors ${
@@ -98,17 +126,17 @@ export default function QuestionDetailModal({
             Pertanyaan
           </div>
           <div className="font-body text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap">
-            {question.prompt}
+            {view.prompt}
           </div>
         </div>
 
         {/* Tab 1: Simulasi Pengerja */}
-        {tab === 'preview' && (
+        {activeTab === 'preview' && (
           <div className="space-y-4">
             {type === 'single' && (
               <div className="space-y-2">
                 <div className="text-[12px] text-dimmer">Pilih satu jawaban:</div>
-                {(question.options || []).map((opt, idx) => (
+                {(view.options || []).map((opt, idx) => (
                   <label
                     key={idx}
                     className={`flex items-center gap-3 p-2.5 rounded-smc border cursor-pointer transition ${
@@ -133,7 +161,7 @@ export default function QuestionDetailModal({
             {type === 'multiple' && (
               <div className="space-y-2">
                 <div className="text-[12px] text-dimmer">Pilih satu atau lebih jawaban:</div>
-                {(question.options || []).map((opt, idx) => {
+                {(view.options || []).map((opt, idx) => {
                   const selected = Array.isArray(userAnswer) && userAnswer.includes(idx);
                   return (
                     <label
@@ -231,7 +259,7 @@ export default function QuestionDetailModal({
             {type === 'matching' && (
               <div className="space-y-2">
                 <div className="text-[12px] text-dimmer">Jodohkan item di kiri dengan pilihan di kanan:</div>
-                {(question.pairs || []).map((p, idx) => (
+                {(view.pairs || []).map((p, idx) => (
                   <div key={idx} className="flex items-center gap-2">
                     <span className="w-1/2 p-2 rounded-smc border border-line bg-bg2 text-[13px] text-ink">
                       {p.left}
@@ -248,7 +276,7 @@ export default function QuestionDetailModal({
                       }}
                     >
                       <option value="">Pilih pasangan...</option>
-                      {question.pairs.map((optP, pIdx) => (
+                      {view.pairs.map((optP, pIdx) => (
                         <option key={pIdx} value={optP.right}>
                           {optP.right}
                         </option>
@@ -262,9 +290,9 @@ export default function QuestionDetailModal({
             {type === 'ordering' && (
               <div className="space-y-2">
                 <div className="text-[12px] text-dimmer">Urutan saat ini (gunakan tombol untuk menggeser):</div>
-                {((Array.isArray(userAnswer) && userAnswer.length === question.items?.length)
+                {((Array.isArray(userAnswer) && userAnswer.length === view.items?.length)
                   ? userAnswer
-                  : (question.items || [])
+                  : (view.items || [])
                 ).map((it, idx, arr) => (
                   <div key={idx} className="flex items-center justify-between p-2 rounded-smc border border-line bg-bg2">
                     <span className="text-[13px] text-ink">{idx + 1}. {it}</span>
@@ -304,7 +332,7 @@ export default function QuestionDetailModal({
                 <textarea
                   rows={5}
                   placeholder="Tulis kode..."
-                  value={userAnswer ?? (question.starterCode || '')}
+                  value={userAnswer ?? (view.starterCode || '')}
                   onChange={(e) => setUserAnswer(e.target.value)}
                   className="w-full font-mono text-[13px] rounded-smc border border-line bg-bg2 p-3 text-ink"
                 />
@@ -315,22 +343,32 @@ export default function QuestionDetailModal({
               <div className="space-y-3">
                 <div className="p-3 rounded-smc border border-line bg-bg2 text-[13.5px] leading-relaxed">
                   <div className="font-mono text-[10px] uppercase text-dimmer mb-1">Kasus Studi</div>
-                  {question.caseText}
+                  {view.caseText}
                 </div>
                 <div className="text-[12px] text-dimmer">
-                  {question.subQuestions?.length || 0} Sub-Pertanyaan
+                  {view.subQuestions?.length || 0} Sub-Pertanyaan
                 </div>
               </div>
             )}
 
             {/* Actions for simulation */}
             <div className="flex items-center gap-2 pt-2">
-              <Button size="sm" onClick={handleGrade}>
-                <IconCheck size={15} /> Periksa Jawaban
-              </Button>
-              <Button size="sm" variant="ghost" onClick={resetSimulation}>
-                Reset
-              </Button>
+              {isOwner ? (
+                <>
+                  <Button size="sm" onClick={handleGrade}>
+                    <IconCheck size={15} /> Periksa Jawaban
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={resetSimulation}>
+                    Reset
+                  </Button>
+                </>
+              ) : (
+                <p className="rounded-smc border border-line bg-bg2 px-3 py-2 text-[12.5px] text-dimmer">
+                  Kunci jawaban soal ini disimpan terpisah dan hanya bisa dibaca
+                  pembuatnya, jadi tidak bisa dipakai untuk menilai jawabanmu di
+                  sini. Soal ini tetap bisa kamu kerjakan lewat kuis.
+                </p>
+              )}
             </div>
 
             {/* Simulation Result Output */}
@@ -353,7 +391,7 @@ export default function QuestionDetailModal({
                       : <span className="inline-flex items-center gap-1.5 text-accent"><IconClose size={15} /> Jawaban Kurang Tepat</span>}
                   </span>
                   <span className="font-mono text-[12px]">
-                    +{gradingResult.pointsEarned} / {question.points || 10} Poin
+                    +{gradingResult.pointsEarned} / {view.points || 10} Poin
                   </span>
                 </div>
               </div>
@@ -362,7 +400,7 @@ export default function QuestionDetailModal({
         )}
 
         {/* Tab 2: Kunci & Pembahasan */}
-        {tab === 'key' && (
+        {activeTab === 'key' && (
           <div className="space-y-4">
             <div className="p-3 rounded-smc border border-line bg-bg2 space-y-2">
               <div className="font-mono text-[10.5px] uppercase tracking-wider text-dimmer">
@@ -371,17 +409,17 @@ export default function QuestionDetailModal({
 
               {type === 'single' && (
                 <div className="text-[14px] text-ink">
-                  Opsi Benar: <b>{question.options?.[question.answerIndex] ?? '—'}</b>
-                  <span className="text-dim text-[12px] ml-2">(Indeks: {question.answerIndex})</span>
+                  Opsi Benar: <b>{view.options?.[view.answerIndex] ?? '—'}</b>
+                  <span className="text-dim text-[12px] ml-2">(Indeks: {view.answerIndex})</span>
                 </div>
               )}
 
               {type === 'multiple' && (
                 <div className="space-y-1">
                   <div className="text-[12px] text-dimmer">Daftar Opsi Benar:</div>
-                  {(question.correctIndices || []).map((idx) => (
+                  {(view.correctIndices || []).map((idx) => (
                     <div key={idx} className="text-[13.5px] text-ink">
-                      • {question.options?.[idx]}
+                      • {view.options?.[idx]}
                     </div>
                   ))}
                 </div>
@@ -389,14 +427,14 @@ export default function QuestionDetailModal({
 
               {type === 'boolean' && (
                 <div className="text-[14px] font-semibold text-ink">
-                  {question.correctBoolean ? 'BENAR (True)' : 'SALAH (False)'}
+                  {view.correctBoolean ? 'BENAR (True)' : 'SALAH (False)'}
                 </div>
               )}
 
               {type === 'short_answer' && (
                 <div className="space-y-1">
                   <div className="text-[12px] text-dimmer">Variasi Jawaban Diterima:</div>
-                  {(question.acceptedAnswers || []).map((ans, idx) => (
+                  {(view.acceptedAnswers || []).map((ans, idx) => (
                     <div key={idx} className="text-[13.5px] text-ink">• {ans}</div>
                   ))}
                 </div>
@@ -406,21 +444,21 @@ export default function QuestionDetailModal({
                 <div className="space-y-1">
                   <div className="text-[12px] text-dimmer">Contoh Jawaban / Rubrik:</div>
                   <div className="text-[13.5px] text-ink whitespace-pre-wrap">
-                    {question.sampleAnswer || '—'}
+                    {view.sampleAnswer || '—'}
                   </div>
                 </div>
               )}
 
               {type === 'numerical' && (
                 <div className="text-[14px] text-ink">
-                  Nilai: <b>{question.correctValue}</b> (Toleransi: ±{question.tolerance || 0})
+                  Nilai: <b>{view.correctValue}</b> (Toleransi: ±{view.tolerance || 0})
                 </div>
               )}
 
               {type === 'matching' && (
                 <div className="space-y-1">
                   <div className="text-[12px] text-dimmer">Pasangan Benar:</div>
-                  {(question.pairs || []).map((p, idx) => (
+                  {(view.pairs || []).map((p, idx) => (
                     <div key={idx} className="text-[13px] text-ink">
                       <b>{p.left}</b> <IconArrowRight size={13} className="inline align-[-2px] text-dimmer" /> {p.right}
                     </div>
@@ -431,7 +469,7 @@ export default function QuestionDetailModal({
               {type === 'ordering' && (
                 <div className="space-y-1">
                   <div className="text-[12px] text-dimmer">Urutan Benar:</div>
-                  {(question.items || []).map((it, idx) => (
+                  {(view.items || []).map((it, idx) => (
                     <div key={idx} className="text-[13px] text-ink">
                       {idx + 1}. {it}
                     </div>
@@ -441,19 +479,19 @@ export default function QuestionDetailModal({
 
               {type === 'code' && (
                 <div className="space-y-2">
-                  {question.sampleSolution && (
+                  {view.sampleSolution && (
                     <div>
                       <div className="text-[12px] text-dimmer">Solusi Contoh:</div>
                       <pre className="font-mono text-[12px] p-2 rounded bg-bg text-ink whitespace-pre-wrap">
-                        {question.sampleSolution}
+                        {view.sampleSolution}
                       </pre>
                     </div>
                   )}
-                  {question.expectedOutput && (
+                  {view.expectedOutput && (
                     <div>
                       <div className="text-[12px] text-dimmer">Output yang Diharapkan:</div>
                       <pre className="font-mono text-[12px] p-2 rounded bg-bg text-ink whitespace-pre-wrap">
-                        {question.expectedOutput}
+                        {view.expectedOutput}
                       </pre>
                     </div>
                   )}
@@ -467,14 +505,14 @@ export default function QuestionDetailModal({
                 Pembahasan / Penjelasan
               </div>
               <div className="text-[13.5px] leading-relaxed text-ink whitespace-pre-wrap">
-                {question.explanation || 'Belum ada penjelasan tambahan untuk soal ini.'}
+                {view.explanation || 'Belum ada penjelasan tambahan untuk soal ini.'}
               </div>
             </div>
           </div>
         )}
 
         {/* Tab 3: Laporan Soal */}
-        {tab === 'reports' && (
+        {activeTab === 'reports' && (
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-[12.5px] leading-relaxed text-dim">

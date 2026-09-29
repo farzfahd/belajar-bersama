@@ -1,5 +1,28 @@
 # PROGRESS — Belajar Bersama
 
+### 2026-09-28 — ROOT CAUSE "Akses ditolak daftar kuis" DIPERBAIKI (deploy production rules) + verifikasi server-side
+
+**Masalah:** di produksi (`belajar-bersama-prod`), daftar kuis gagal dimuat dengan "Gagal memuat daftar kuis: Akses ditolak…" (`src/shared/utils/errors.js` map dari `permission-denied`).
+
+**Root cause (terbukti, bukan dugaan):** *production rules drift*. Ruleset yang ter-deploy di produksi (`…/rulesets/10533ef7-6439-4ec1-9bd6-6bb74958ad7c`, dibuat 2026-09-26, update terakhir 2026-09-26T17:42:41Z) **tidak mengandung string "quizzes" sama sekali**, sedangkan `firestore.rules` repo sudah punya blok `spaces/{spaceId}/quizzes` (ditambahkan commit `21cfcf7`, 2026-09-27 02:34 +0700 — setelah deploy terakhir). Rules deny-by-default (`allow read, write: if false`) → seluruh read/write `spaces/*/quizzes` ditolak. Cek `.github/workflows/deploy-pages.yml`: workflow hanya build + deploy GitHub Pages, **tidak pernah deploy rules**, jadi drift tidak pernah tertutup otomatis.
+
+**Perbaikan (disetujui pengguna; DOKUMEN TIDAK DIUBAH):**
+- `npx firebase deploy --only firestore:rules --project belajar-bersama-prod` → **Deploy complete!** — rules deploy **apa adanya** dari repo (tidak ada edit `firestore.rules`, client, atau grading).
+- Ruleset baru produksi: `projects/belajar-bersama-prod/rulesets/b1aa56f6-faf0-41aa-acbc-bf40f10e2c6d`, updateTime **2026-09-28T16:13:12.587637Z**.
+- Verifikasi isi: source rules yang ter-deploy **byte-identical** (UTF-8) dengan `firestore.rules` repo termasuk blok quizzes/attempts/questionReports (dibuktikan via API + Node; diff PowerShell sebelumnya palsu — artefak BOM/CRLF/console).
+
+**Verifikasi server-side `POST …/projects/belajar-bersama-prod:test` terhadap rules yang sama (8/8 lulus):**
+1. member (owner) `list` quizzes → **ALLOW** · 2. non-member `list` → **DENY** · 3. anonymous `list` → **DENY** · 4. owner baca attempt sendiri → **ALLOW** · 5. partner baca attempt owner → **DENY** (PRIVAT) · 6. owner soal baca report → **ALLOW** · 7. member belum verified baca quiz → **ALLOW** (quizzes read = isMember saja) · 8. non-member baca report → **DENY**.
+- Catatan teknis API (untuk AI berikutnya): `request.path` memakai bentuk `PLAIN` `/databases/(default)/documents/...` (bukan `projects/...` yang ditolak 400). Arg fungsi mock (`exists`/`get`) ternyata **URL-encoded**: `/databases/%28default%29/documents/spaces/S`. `get()` result = objek resource `{ data: { … } }`. `list` collection path tak cocok di API ini; kumpulan `list` dipakai path dokumen + `query.limit` (terbukti bisa). karya `functionCalls` di response menunjukkan path yang benar-benar dipanggil engine.
+- Emulator tetap konsisten (user `qMjSs…` member ruangnya; list member OK). Hipotesis mismatch space/member **terbantahkan**: rules sudah mencegah state itu (users create wajib `auth.uid == uid`, set `spaceId` wajib `isMemberOf`).
+
+**Status git setelah deploy: bersih** (`git status --porcelain` kosong; tidak ada commit/push). Tidak ada file repo yang diubah.
+
+**Belum / langkah berikut (bukan penghalang):**
+- `npm run test:rules` belum dijalankan session ini (butuh emulator :8080 mati; rules tidak diubah, jadi hanya konfirmasi ulang).
+- Hasil verifikasi visual/UX belum; cek browser produksi "daftar kuis termuat" langsung oleh pengguna.
+- **Minggu depan bila melanjutkan:** entry di bawah "Belum dikerjakan" (verifikasi visual browse soal PGK, audit quiz access selesai karena root cause sudah beres). Tambahkan guard CI yang **mem-push `firestore.rules` ke produksi** (mis. `firebase deploy --only firestore:rules`) agar drift tidak terulang — belum dikerjakan, menunggu keputusan.
+
 ### 2026-09-28 — Grading kontrak seragam + kredit parsial PGK γ=0.75 (Tahap 1 Fase 2)
 
 Tahap 1 Fase 2: seluruh penilaian soal menarik satu kontrak, dan soal Pilihan Ganda Kunci (PGK / multiple) mendapat kredit parsial berbasis riset Monte Carlo. Bekerja di `src/features/questions/utils/grading.js` saja; **`firestore.rules` tidak disentuh** — validasi poin di rules hanya membandingkan `answers[0].pointsEarned` dengan `==`, jadi nilai pecahan (mis. 6.67, 3.33) tetap lolos tanpa migrasi skema.

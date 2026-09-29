@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { IconCheck, IconFlag, IconWarn } from '../../../shared/icons';
+import { IconCheck, IconClock, IconFlag, IconWarn } from '../../../shared/icons';
 import PageHeader from '../../../app/layout/PageHeader';
 import Badge from '../../../shared/ui/Badge';
 import Button from '../../../shared/ui/Button';
@@ -18,7 +18,9 @@ import {
   canFinalize,
   effectivePoints,
   formatDuration,
-  indexSnapshot
+  indexSnapshot,
+  isAwaitingServerScore,
+  isV3Attempt
 } from '../utils/attemptEngine';
 import QuestionAttemptForm from './QuestionAttemptForm';
 import { toErrorMessage } from '../../../shared/utils/errors';
@@ -27,8 +29,14 @@ const STATUS_LABEL = {
   [ATTEMPT_STATUS.inProgress]: ['dim', 'Berjalan'],
   [ATTEMPT_STATUS.completed]: ['ok', 'Selesai'],
   [ATTEMPT_STATUS.pendingManualGrade]: ['warn', 'Menunggu penilaian'],
+  [ATTEMPT_STATUS.pendingGrading]: ['warn', 'Menunggu nilai'],
   [ATTEMPT_STATUS.graded]: ['accent', 'Dinilai']
 };
+
+// Tipe yang SELALU dinilai manual oleh `grading.js`. Dipakai untuk menentukan
+// tombol "Beri nilai" pada attempt v3, yang belum punya flag `needsManualGrade`
+// di entri jawabannya (flag itu ditulis server bersama skornya).
+const MANUAL_TYPES = new Set(['essay', 'code']);
 
 function initialFeedback(answers, questionId) {
   const found = (Array.isArray(answers) ? answers : []).find((a) => a.questionId === questionId);
@@ -99,9 +107,19 @@ function ManualGradeDialog({ target, onClose, onSave, saving }) {
 
 // Halaman hasil: /quiz/:quizId/attempt/:attemptId/result
 //
-// Skor, breakdown per soal, dan form penilaian manual untuk soal uraian/kode.
-// Partner boleh mengisi nilai manual; hanya pemilik attempt yang boleh
-// memfinalisasi skor (`finalizeAttempt`).
+// Tiga jalur tampilan, dan bedanya bukan tampilan tapi siapa yang boleh menulis:
+//
+//   v3 (baru) — snapshot TANPA kunci, jadi halaman ini tidak bisa menghitung
+//               nilai: tidak ada kunci di dokumen dan rules menolak pemilik
+//               menulis `score`. Skor muncul setelah server menilainya dari
+//               dokumen kunci privat. Selama itu belum terjadi, yang ditampilkan
+//               justru jawaban peserta + status "menunggu nilai" — BUKAN angka 0,
+//               karena "0" akan berarti "salah semua".
+//   v2 (lama) — snapshot menyalin kunci, jadi breakdown benar/salah per soal dan
+//               "Finalisasi skor akhir" milik pemilik masih bisa dipakai.
+//
+// Penilaian manual tetap bisa diisi partner pada kedua versi: pada v3 rules
+// mengizinkan `manualScore` di dalam entri jawaban (tanpa menyentuh skor).
 //
 // Halaman ini SENGAJA tidak memakai `useQuestions`. Review attempt membaca
 // `attempt.questionSnapshot` saja, sehingga attempt lama tetap terbuka dan
@@ -145,17 +163,38 @@ export default function QuizAttemptResultPage() {
   const isOwner = attempt.uid === user?.uid;
   const [tone, statusLabel] = STATUS_LABEL[attempt.status] || STATUS_LABEL.inProgress;
   const answers = Array.isArray(attempt.answers) ? attempt.answers : [];
-  const pending = answers.filter(
-    (a) => a.needsManualGrade && (a.manualScore === null || a.manualScore === undefined)
-  );
+  // Attempt v3 belum punya nilai sampai server menilainya. Kehilangan field nilai
+  // inilah yang menyatakan "menunggu", bukan `status` — server menulis keduanya
+  // dalam satu operasi, jadi membaca keduanya selalu konsisten.
+  const awaitingServer = isAwaitingServerScore(attempt);
+  const v3 = isV3Attempt(attempt);
+  const pending = awaitingServer
+    ? []
+    : answers.filter(
+        (a) => a.needsManualGrade && (a.manualScore === null || a.manualScore === undefined)
+      );
   const showExplanation = quiz?.settings?.showExplanation !== false;
   const showAnswers = quiz?.settings?.showAnswerMode !== 'none';
+  // Penilaian manual butuh jawaban sudah diserahkan: `attemptManualOnlyV3` dan
+  // `attemptManualOnly` sama-sama menuntut `submittedAt`/status != in_progress.
   const canGrade = attempt.status !== ATTEMPT_STATUS.inProgress;
+  // Skor otoritatif pada v3 hanya boleh ditulis server, jadi tombol finalisasi
+  // tidak boleh muncul sama sekali (bukan sekadar gagal saat ditekan).
+  const canFinalizeScore = isOwner && !v3 && canFinalize(answers);
 
   const saveManual = async (questionId, maxPoints, current, feedback) => {
     setBusyId(questionId);
     try {
-      await gradeAnswerManually(spaceId, quizId, attemptId, answers, questionId, current, feedback ?? '');
+      await gradeAnswerManually(
+        spaceId,
+        quizId,
+        attemptId,
+        answers,
+        questionId,
+        current,
+        feedback ?? '',
+        attempt
+      );
       toast.success('Nilai manual disimpan.');
     } catch (err) {
       toast.error(toErrorMessage(err));
@@ -186,20 +225,40 @@ export default function QuizAttemptResultPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        icon={<IconCheck size={22} />}
+        icon={awaitingServer ? <IconClock size={22} /> : <IconCheck size={22} />}
         eyebrow="Hasil kuis"
         title={quiz?.title || 'Kuis'}
-        description={`${attempt.score} / ${attempt.maxScore || 0} poin · ${attempt.scorePercent || 0}%`}
+        description={
+          awaitingServer
+            ? 'Jawaban sudah dikirim. Nilainya dihitung dari kunci soal, tidak dari perangkat ini.'
+            : `${attempt.score} / ${attempt.maxScore || 0} poin · ${attempt.scorePercent || 0}%`
+        }
         actions={
           <>
             <Badge tone={tone}>{statusLabel}</Badge>
-            {attempt.passed && <Badge tone="ok">Lulus</Badge>}
+            {!awaitingServer && attempt.passed && <Badge tone="ok">Lulus</Badge>}
             {attempt.durationSeconds != null && (
               <Badge tone="dim">{formatDuration(attempt.durationSeconds)}</Badge>
             )}
           </>
         }
       />
+
+      {awaitingServer && (
+        <div className="card flex flex-col gap-2 border-l-2 border-l-warn pl-3">
+          <p className="text-[13.5px] text-dim">
+            Belum ada nilai untuk attempt ini. Penilaian dilakukan dari kunci soal yang tersimpan
+            terpisah, jadi jawabannya di sini tidak bisa dinilai perangkat ini — termasuk oleh kamu
+            sendiri sebagai pemilik attempt.
+          </p>
+          {v3 && MANUAL_TYPES.size > 0 && (
+            <p className="text-[13.5px] text-dim">
+              Soal uraian dan kode dinilai manual: salah satu dari kalian bisa mengisinya di bawah
+              memakai tombol &quot;Beri nilai&quot;.
+            </p>
+          )}
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div className="card flex flex-col gap-2 border-l-2 border-l-warn pl-3">
@@ -209,7 +268,7 @@ export default function QuizAttemptResultPage() {
               ? 'Partner juga bisa menilai — pilih "Beri nilai" pada soal yang relevan.'
               : 'Kamu bisa membantu menilai soal-soal di bawah.'}
           </p>
-          {isOwner && canFinalize(answers) && (
+          {canFinalizeScore && (
             <Button size="sm" className="self-start" disabled={finalizing} onClick={handleFinalize}>
               {finalizing ? 'Menyimpan…' : 'Finalisasi skor akhir'}
             </Button>
@@ -221,7 +280,12 @@ export default function QuizAttemptResultPage() {
         {answers.map((a, i) => {
           const question = snapshotById.get(a.questionId);
           const points = Number(question?.points) || 0;
-          const needsManual = a.needsManualGrade;
+          // Pada v3 `needsManualGrade` belum ada (ditulis server bersama skor),
+          // jadi penentuannya jatuh ke tipe soal — `grading.js` menandai uraian dan
+          // kode selalu perlu penilaian manual.
+          const needsManual = awaitingServer
+            ? MANUAL_TYPES.has(question?.type)
+            : Boolean(a.needsManualGrade);
           const graded = a.manualScore !== null && a.manualScore !== undefined;
           return (
             <div key={a.questionId || i} className="card flex flex-col gap-3">
@@ -232,13 +296,15 @@ export default function QuizAttemptResultPage() {
                     <Badge tone={graded ? 'ok' : 'warn'}>
                       <IconFlag size={11} /> {graded ? `Nilai ${a.manualScore}` : 'Menunggu nilai'}
                     </Badge>
+                  ) : awaitingServer ? (
+                    <Badge tone="dim">Nilai belum keluar</Badge>
                   ) : a.isCorrect ? (
                     <Badge tone="ok">Benar</Badge>
                   ) : (
                     <Badge tone="danger">Salah</Badge>
                   )}
                   <Badge tone="dim">
-                    {effectivePoints(a)} / {points}
+                    {awaitingServer ? `maks. ${points}` : `${effectivePoints(a)} / ${points}`}
                   </Badge>
                 </span>
               </div>

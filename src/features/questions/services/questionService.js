@@ -3,19 +3,26 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
-  where
+  writeBatch
 } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
 import { COL, ROOT, SCHEMA_VERSION } from '../../../lib/constants';
 import { normalizeTags } from '../../../shared/utils/validate';
-import { buildTypeFields, normalizePairDraft, normalizeSubQuestions } from '../utils/questionTypeFields';
+// Hanya `buildTypeFields` yang dipakai di sini. Aturan PGK (K < N), keunikan
+// pasangan, normalisasi pairDraft, dan batas sub-soal SEMUA dipanggil dari
+// dalamnya, jadi memanggilnya di sini otomatis menjalankan semuanya — lebih
+// baik daripada memeriksa ulang di jalur edit seperti sebelumnya, karena kedua
+// jalur create dan edit sekarang lewat validasi yang sama persis.
+import { buildTypeFields } from '../utils/questionTypeFields';
 import { normalizeQuestionReport as normalizeQuestionReportInput } from '../utils/questionReport';
+import { planCreateQuestion, planUpdateQuestion } from '../utils/questionWritePlan';
+import { keyDocRef } from './questionKeyService';
 
 /**
  * Menyesuaikan answerIndex saat satu opsi dihapus.
@@ -40,26 +47,20 @@ export function adjustCorrectIndicesOnOptionRemove(removedIndex, currentIndices 
     .map((idx) => (idx > removedIndex ? idx - 1 : idx));
 }
 
-export async function createQuestion(spaceId, data) {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error('Pengguna belum masuk.');
-  if (!spaceId) throw new Error('spaceId wajib diisi.');
-
-  const prompt = (data.prompt || '').trim();
-  if (!prompt) throw new Error('Pertanyaan/prompt wajib diisi.');
-
-  const type = data.type || 'single';
-  const qCol = collection(db, ROOT.spaces, spaceId, COL.questions);
-  const qRef = doc(qCol);
-
-  const cleanTags = normalizeTags(data.tags || []);
-  const baseDoc = {
-    prompt,
-    type,
+// Metadata publik yang menyertai setiap dokumen soal. Dipisah dari logika kunci
+// supaya jelas mana yang tidak pernah boleh berisi jawaban.
+function publicMetadata(data, uid) {
+  return {
+    prompt: (data.prompt || '').trim(),
     topicId: data.topicId || '',
     difficulty: data.difficulty || 'beginner',
     visibility: data.visibility || 'shared',
-    tags: cleanTags,
+    tags: normalizeTags(data.tags || []),
+    // `explanation` TETAP di dokumen publik, bukan di dokumen kunci. Ia bukan
+    // field kunci: hanya boleh tampil setelah attempt selesai, dan itu
+    // dikendalikan di sisi snapshot/UI, bukan dengan menyembunyikannya di sini.
+    // Memindahkannya ke key doc akan membuatnya hilang untuk review, karena
+    // rules hanya mengizinkan owner membaca dokumen kunci.
     explanation: (data.explanation || '').trim().slice(0, 2000),
     points: Math.max(1, Math.min(100, Number(data.points) || 10)),
     timeLimitSeconds: Math.max(0, Number(data.timeLimitSeconds) || 0),
@@ -74,74 +75,136 @@ export async function createQuestion(spaceId, data) {
     updatedAt: serverTimestamp(),
     schemaVersion: SCHEMA_VERSION
   };
+}
 
-  // Validasi & pembersihan field khusus tipe. Logikanya dipindah ke
-  // `utils/questionTypeFields.js` (murni & bisa diuji); bentuk dokumen yang
-  // dihasilkan tetap sama.
-  Object.assign(baseDoc, buildTypeFields(type, data));
+/**
+ * Membuat soal baru: dokumen publik + dokumen kunci, dalam SATU batch.
+ *
+ * Kenapa batch dan bukan dua `setDoc` terpisah: kalau yang public berhasil dan
+ * yang key gagal, ada soal aktif yang tidak punya kunci. Batch membuat keduanya
+ * succeed atau gagal bersama, jadi kondisi "public-without-key" tidak pernah
+ * terjadi meski Rules menolak salah satunya.
+ *
+ * `keyRevision` ditulis ke dokumen publik sebagai penunjuk revisi kunci yang
+ * aktif. Ini yang dipakai `planUpdateQuestion` untuk memberi nomor revisi baru,
+ * dan yang membuat quiz bisa mengunci soal ke revisi tertentu.
+ */
+export async function createQuestion(spaceId, data) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Pengguna belum masuk.');
+  if (!spaceId) throw new Error('spaceId wajib diisi.');
 
-  await setDoc(qRef, baseDoc);
+  const prompt = (data.prompt || '').trim();
+  if (!prompt) throw new Error('Pertanyaan/prompt wajib diisi.');
+
+  const type = data.type || 'single';
+  const qCol = collection(db, ROOT.spaces, spaceId, COL.questions);
+  const qRef = doc(qCol);
+
+  const baseDoc = { ...publicMetadata(data, uid), prompt, type };
+
+  // Validasi & pembersihan field khusus tipe. Logikanya di
+  // `utils/questionTypeFields.js` (murni & bisa diuji); hasilnya BELUM dipisah
+  // public/key, itu tugas `planCreateQuestion` di bawah.
+  const typeFields = buildTypeFields(type, data);
+
+  const plan = planCreateQuestion({
+    questionId: qRef.id,
+    type,
+    // `data.key` dipakai kalau form mengirim kunci secara terpisah (jalur baru).
+    // Kalau tidak, kunci diambil dari `typeFields` oleh splitter.
+    data: { ...typeFields, key: data.key }
+  });
+
+  const batch = writeBatch(db);
+  batch.set(qRef, {
+    ...baseDoc,
+    ...plan.publicDoc,
+    // Tanpa field ini, `updateQuestion` tidak bisa tahu nomor revisi kunci
+    // berikutnya dan akan selalu menimpa revisi '1'.
+    keyRevision: plan.keyRevision
+  });
+  batch.set(
+    keyDocRef(spaceId, qRef.id, plan.keyRevision),
+    { ...plan.keyDoc, createdAt: serverTimestamp() }
+  );
+  await batch.commit();
+
   return qRef.id;
 }
 
+// Metadata publik pada jalur edit. field yang tidak dikirim TIDAK ditulis, jadi
+// edit metadata tidak menimpa field lain dengan nilai kosong. Perbedaannya dengan
+// `publicMetadata` (jalur create) sengaja: create mengisi default, edit hanya
+// menyentuh apa yang memang|author ubah.
+function publicMetadataPatch(data) {
+  const p = {};
+  if (data.prompt !== undefined) p.prompt = String(data.prompt).trim();
+  if (data.topicId !== undefined) p.topicId = data.topicId;
+  if (data.difficulty !== undefined) p.difficulty = data.difficulty;
+  if (data.visibility !== undefined) p.visibility = data.visibility;
+  if (data.tags !== undefined) p.tags = normalizeTags(data.tags);
+  if (data.explanation !== undefined) p.explanation = String(data.explanation).trim();
+  if (data.points !== undefined) p.points = Math.max(1, Math.min(100, Number(data.points) || 10));
+  if (data.timeLimitSeconds !== undefined) p.timeLimitSeconds = Math.max(0, Number(data.timeLimitSeconds) || 0);
+  if (data.attachmentUrl !== undefined) p.attachmentUrl = (data.attachmentUrl || '').trim();
+  if (data.relatedNoteId !== undefined) p.relatedNoteId = (data.relatedNoteId || '').trim();
+  if (data.relatedResourceId !== undefined) p.relatedResourceId = (data.relatedResourceId || '').trim();
+  if (data.hasAnswerKey !== undefined) p.hasAnswerKey = Boolean(data.hasAnswerKey);
+  return p;
+}
+
+/**
+ * Mengubah soal: patch dokumen publik + dokumen kunci REVISI BARU, satu batch.
+ *
+ * Kunci tidak pernah ditulis ke dokumen publik lagi. Setiap edit kunci
+ * menghasilkan dokumen kunci baru dengan nomor revisi yang naik; revisi lama
+ * dibiarkan utuh karena attempt lama masih menunjuknya.
+ *
+ * Soal legacy (kunci inline) ditangani: kunci yang masih tertinggal dibawa ke
+ * dokumen kunci baru, lalu field inline-nya dihapus pada penulisan yang sama.
+ * Pemindahan terjadi di dalam batch, jadi tidak pernah ada keadaan di mana
+ * kunci sudah hilang dari satu tempat dan belum ada di tempat lain.
+ */
 export async function updateQuestion(spaceId, questionId, data) {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('Pengguna belum masuk.');
   if (!spaceId || !questionId) throw new Error('ID tidak lengkap.');
 
   const qRef = doc(db, ROOT.spaces, spaceId, COL.questions, questionId);
-  const updates = {
-    updatedAt: serverTimestamp()
-  };
+  // Dokumen soal yang ADA sekarang, bukan data dari form. Ini sumber kebenaran
+  // untuk nomor revisi kunci dan untuk kunci legacy yang harus dibawa.
+  const currentSnap = await getDoc(qRef);
+  const existing = currentSnap.exists() ? { id: currentSnap.id, ...currentSnap.data() } : null;
+  if (!existing) throw new Error('Soal tidak ditemukan.');
 
-  if (data.prompt !== undefined) updates.prompt = String(data.prompt).trim();
-  if (data.topicId !== undefined) updates.topicId = data.topicId;
-  if (data.difficulty !== undefined) updates.difficulty = data.difficulty;
-  if (data.visibility !== undefined) updates.visibility = data.visibility;
-  if (data.tags !== undefined) updates.tags = normalizeTags(data.tags);
-  if (data.explanation !== undefined) updates.explanation = String(data.explanation).trim();
-  if (data.points !== undefined) updates.points = Math.max(1, Math.min(100, Number(data.points) || 10));
-  if (data.timeLimitSeconds !== undefined) updates.timeLimitSeconds = Math.max(0, Number(data.timeLimitSeconds) || 0);
-  if (data.attachmentUrl !== undefined) updates.attachmentUrl = (data.attachmentUrl || '').trim();
-  if (data.relatedNoteId !== undefined) updates.relatedNoteId = (data.relatedNoteId || '').trim();
-  if (data.relatedResourceId !== undefined) updates.relatedResourceId = (data.relatedResourceId || '').trim();
-  if (data.hasAnswerKey !== undefined) updates.hasAnswerKey = Boolean(data.hasAnswerKey);
+  const type = data.type || existing.type;
 
-  const type = data.type;
-  if (type) updates.type = type;
+  // Field khusus tipe tetap divalidasi di sini, sama seperti sebelumnya, karena
+  // form editor mengirim data mentah dan `planUpdateQuestion` hanya memisahkannya
+  // — bukan membersihkan isinya. PGK (K < N) dan keunikan pasangan dijaga di
+  // sini; `createQuestion` sudah lewat `buildTypeFields` yang memanggil keduanya.
+  const typeFields = buildTypeFields(type, data);
 
-  // Update field tipe
-  if (data.options !== undefined) {
-    const rawOptions = data.options.map((o) => String(o || '').trim());
-    updates.options = rawOptions;
-  }
-  if (data.answerIndex !== undefined) updates.answerIndex = Number(data.answerIndex);
-  if (data.correctIndices !== undefined) updates.correctIndices = data.correctIndices;
-  if (data.correctBoolean !== undefined) updates.correctBoolean = Boolean(data.correctBoolean);
-  if (data.acceptedAnswers !== undefined) updates.acceptedAnswers = data.acceptedAnswers;
-  if (data.sampleAnswer !== undefined) updates.sampleAnswer = String(data.sampleAnswer);
-  if (data.pairs !== undefined) updates.pairs = data.pairs;
-  // Draft editor menjodohkan - HANYA untuk soal tipe `matching`, dan hanya
-  // kalau draft-nya punya struktur yang bisa dipercaya. `null` berarti "hapus
-  // field ini dari dokumen" (Firestore: null = field dihapus), jadi draft rusak
-  // tidak pernah menggantikan draft lama yang masih benar. `pairs` sendiri
-  // tidak pernah diubah bentuknya di sini.
-  if (type === 'matching' && data.pairDraft !== undefined) {
-    const draft = normalizePairDraft(data.pairDraft);
-    updates.pairDraft = draft || null;
-  }
-  if (data.items !== undefined) updates.items = data.items;
-  if (data.correctValue !== undefined) updates.correctValue = Number(data.correctValue);
-  if (data.tolerance !== undefined) updates.tolerance = Number(data.tolerance);
-  if (data.starterCode !== undefined) updates.starterCode = String(data.starterCode);
-  if (data.expectedOutput !== undefined) updates.expectedOutput = String(data.expectedOutput);
-  if (data.sampleSolution !== undefined) updates.sampleSolution = String(data.sampleSolution);
-  if (data.caseText !== undefined) updates.caseText = String(data.caseText);
-  // Divalidasi dengan normalizer yang sama seperti saat create, supaya mode
-  // edit tidak bisa menulis nested >1 tingkat atau tipe yang tidak didukung.
-  if (data.subQuestions !== undefined) updates.subQuestions = normalizeSubQuestions(data.subQuestions);
+  const plan = planUpdateQuestion({
+    type,
+    data: { ...typeFields, key: data.key },
+    existingQuestion: existing
+  });
 
-  await updateDoc(qRef, updates);
+  const updates = { ...publicMetadataPatch(data), ...plan.publicPatch, updatedAt: serverTimestamp() };
+  if (data.type !== undefined) updates.type = data.type;
+  // Nomor revisi aktif dipindah ke dokumen publik supaya edit berikutnya knows
+  // nomor berikutnya, dan quiz bisa mengunci soal ke revisi tertentu.
+  updates.keyRevision = plan.keyRevision;
+
+  const batch = writeBatch(db);
+  batch.update(qRef, updates);
+  batch.set(
+    keyDocRef(spaceId, questionId, plan.keyRevision),
+    { ...plan.keyDoc, createdAt: serverTimestamp() }
+  );
+  await batch.commit();
 }
 
 export async function softDeleteQuestion(spaceId, questionId) {

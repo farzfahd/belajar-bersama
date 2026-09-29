@@ -17,8 +17,12 @@ import {
   updateQuestion
 } from '../services/questionService';
 import { toErrorMessage } from '../../../shared/utils/errors';
+import { PGK_DISTRACTOR_MESSAGE } from '../utils/questionTypeFields';
 import SubQuestionEditor from './SubQuestionEditor';
 import { MatchingEditor } from './MatchingBoard';
+import { keyFieldsForType } from '../utils/questionKeySplit';
+import { mergeSubQuestionKey } from '../utils/keyView';
+import { hasInlineAnswerKey } from '../utils/legacyKey';
 
 export default function QuestionFormModal({
   open,
@@ -26,6 +30,7 @@ export default function QuestionFormModal({
   spaceId,
   topics = [],
   initialData = null,
+  keyData = null,
   onSaved
 }) {
   const toast = useToast();
@@ -97,25 +102,50 @@ export default function QuestionFormModal({
       setTagInput((initialData.tags || []).join(', '));
 
       setOptions(initialData.options?.length >= 2 ? initialData.options : ['', '']);
-      setAnswerIndex(initialData.answerIndex ?? 0);
-      setCorrectIndices(initialData.correctIndices?.length ? initialData.correctIndices : [0]);
 
-      setCorrectBoolean(initialData.correctBoolean ?? true);
-      setAcceptedAnswers(initialData.acceptedAnswers?.length ? initialData.acceptedAnswers : ['']);
-      setSampleAnswer(initialData.sampleAnswer || '');
-      setPairs(initialData.pairs?.length >= 2 ? initialData.pairs : [{ left: '', right: '' }, { left: '', right: '' }]);
+      // KUNCI TIDAK LAGI BACA DARI DOKUMEN SOAL.
+      //
+      // Setelah pemisahan kunci, `initialData` (dokumen `questions/{qid}`) tidak
+      // memuat `answerIndex`/`correctIndices`/`pairs`/dst. Kuncinya ada di
+      // `questions/{qid}/key/{rev}` dan dimuat lewat `keyData` dari hook
+      // pemanggil (`useQuestionKeys`).
+      //
+      // Fallback ke `initialData` HANYA untuk soal legacy yang kuncinya masih
+      // inline. Itu bukan membuka kebocoran: yang membaca form ini author soal
+      // itu sendiri, dan kunci legacy-nya memang sudah ada di dokumen miliknya.
+      // Jalur ini juga yang memindahkan kunci legacy ke dokumen terpisah saat
+      // author menyimpan (lihat `planUpdateQuestion`).
+      //
+      // Kalau keduanya tidak ada — dokumen soal sudah terpisah tetapi dokumen
+      // kuncinya gagal dimuat — form TIDAK diam-diam memakai nilai default dan
+      // menimpa kunci lama. `keyUnavailable` di bawah membuat `handleSave`
+      // menolak sampai kunci berhasil dimuat.
+      const key = keyData || initialData;
+      setAnswerIndex(key.answerIndex ?? 0);
+      setCorrectIndices(key.correctIndices?.length ? key.correctIndices : [0]);
+
+      setCorrectBoolean(key.correctBoolean ?? true);
+      setAcceptedAnswers(key.acceptedAnswers?.length ? key.acceptedAnswers : ['']);
+      setSampleAnswer(key.sampleAnswer || '');
+      setPairs(
+        Array.isArray(key.pairs) && key.pairs.length >= 2
+          ? key.pairs
+          : [{ left: '', right: '' }, { left: '', right: '' }]
+      );
       // Draft editor penjodohhan: ikut dimuat supaya baris yang belum
-      // dipasangkan tidak hilang saat modal dibuka lagi.
+      // dipasangkan tidak hilang saat modal dibuka lagi. `pairDraft` ada di
+      // dokumen soal (bukan di key) karena murni state editor.
       setPairDraft(initialData.pairDraft ?? null);
-      setItems(initialData.items?.length >= 2 ? initialData.items : ['', '']);
-      setCorrectValue(initialData.correctValue !== undefined ? String(initialData.correctValue) : '');
-      setTolerance(initialData.tolerance !== undefined ? String(initialData.tolerance) : '0');
+      setItems(Array.isArray(key.items) && key.items.length >= 2 ? key.items : ['', '']);
+      setCorrectValue(key.correctValue !== undefined ? String(key.correctValue) : '');
+      setTolerance(key.tolerance !== undefined ? String(key.tolerance) : '0');
       setStarterCode(initialData.starterCode || '');
-      setExpectedOutput(initialData.expectedOutput || '');
-      setSampleSolution(initialData.sampleSolution || '');
+      setExpectedOutput(key.expectedOutput || '');
+      setSampleSolution(key.sampleSolution || '');
       setCaseText(initialData.caseText || '');
-      // Memuat sub-soal yang sudah tersimpan supaya mode edit tidak kehilangan isi.
-      setSubQuestions(Array.isArray(initialData.subQuestions) ? initialData.subQuestions : []);
+      // Sub-soal publik dimuat dari dokumen soal; kunci sub-soal datang dari
+      // dokumen kunci dan digabung di sini per indeks.
+      setSubQuestions(mergeSubQuestionKey(initialData.subQuestions, key.subQuestions));
       setStep(2); // langsung ke konten jika edit
     } else {
       setType('single');
@@ -147,7 +177,7 @@ export default function QuestionFormModal({
       setSubQuestions([]);
       setStep(1);
     }
-  }, [open, initialData, topics]);
+  }, [open, initialData, keyData, topics]);
 
   // Option Handlers for Single/Multiple
   const handleAddOption = () => {
@@ -190,6 +220,30 @@ export default function QuestionFormModal({
       return;
     }
 
+    // Mode edit: kunci soal ini HARUS sudah terbaca sebelum apa pun ditulis.
+    //
+    // Tanpa guard ini, form yang gagal memuat dokumen kunci akan menyimpan
+    // nilai default (`answerIndex: 0`, `pairs: [{left:'',right:''}]`, ...) di
+    // atas kunci yang sudah benar — dan karena tiap edit membuat REVISI baru,
+    // kunci lama masih utuh tapi kuncinya tidak lagi sama dengan yang dipakai
+    // attempt yang sedang berjalan. Kegagalan itu muncul jauh dari tempatnya.
+    //
+    // `hasInlineAnswerKey` tetap diterima karena itu kondisi legacy: kuncinya
+    // memang ada (di dokumen soal) dan akan dimindahkan ke dokumen terpisah
+    // pada penulisan yang sama.
+    if (
+      initialData?.id &&
+      keyFieldsForType(type).length > 0 &&
+      !keyData &&
+      !hasInlineAnswerKey(initialData)
+    ) {
+      toast.error(
+        'Kunci jawaban soal ini belum bisa dimuat. Tutup modal lalu buka lagi; menyimpan sekarang akan menimpa kunci yang sudah benar.'
+      );
+      setStep(2);
+      return;
+    }
+
     // Validasi opsi duplikat & isi
     if (type === 'single' || type === 'multiple') {
       const cleanOptions = options.map((o) => o.trim());
@@ -206,6 +260,15 @@ export default function QuestionFormModal({
       }
       if (type === 'multiple' && correctIndices.length === 0) {
         toast.error('Pilih setidaknya satu jawaban benar.');
+        setStep(2);
+        return;
+      }
+      // Semua opsi ditandai benar tidak berguna sebagai PGK: tidak ada pengecoh,
+      // jadi "pilih semua" jadi satu-satunya jawaban sempurna. Dicek di sini
+      // supaya pesannya muncul sebelum menekan Simpan (builder tetap memeriksa
+      // sebagai pengaman kedua).
+      if (type === 'multiple' && correctIndices.length >= cleanOptions.length) {
+        toast.error(PGK_DISTRACTOR_MESSAGE);
         setStep(2);
         return;
       }

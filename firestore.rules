@@ -647,33 +647,41 @@ service cloud.firestore {
         || (n == 20 && idx.hasOnly([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]));
     }
 
-    function validSingleChoice(d) {
-      return optionListOk(d)
-        && d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex < d.options.size();
+    // ---------- M1: pemisahan kunci ----------
+    //
+    // Daftar field kunci jawaban per tipe. HARUS sama persis dengan
+    // `KEY_FIELDS_BY_TYPE` di `src/features/questions/utils/questionKeySplit.js`
+    // dan `functions/src/shared/gradeCore.js`; paritas ketiga daftar ini diuji
+    // di `tests/key-split.test.mjs` (test "keyFieldsForType cocok untuk 10 tipe").
+    //
+    // CATATAN: `pairs` & `items` masuk daftar. Untuk `matching`/`ordering` field
+    // itu memang kunci (pasangan/urutan benar), sedangkan bagian publiknya
+    // disimpan sebagai `matchLeft`/`matchRight`/`orderItems`.
+    //
+    // Deklarasi ini sengaja berada DI ATAS validator publik yang memakainya
+    // (`validPublicSubQuestion`): Firestore rules hanya menerima pemanggilan
+    // fungsi yang sudah dideklarasikan secara tekstual sebelumnya.
+    function keyFieldNames() {
+      return [
+        'answerIndex', 'correctIndices', 'correctBoolean', 'acceptedAnswers',
+        'sampleAnswer', 'pairs', 'items', 'correctValue', 'tolerance',
+        'expectedOutput', 'sampleSolution'
+      ];
     }
 
-    function validMultipleChoice(d) {
-      return optionListOk(d)
-        && d.correctIndices is list
-        && d.correctIndices.size() >= 1 && d.correctIndices.size() <= d.options.size()
-        && d.correctIndices.toSet().size() == d.correctIndices.size()
-        && indicesInRange(d.options.size(), d.correctIndices);
-    }
-
-    function validBooleanChoice(d) {
-      return d.correctBoolean is bool;
-    }
-
-    function validShortAnswer(d) {
-      return d.acceptedAnswers is list
-        && d.acceptedAnswers.size() >= 1 && d.acceptedAnswers.size() <= 20
-        && d.acceptedAnswers[0] is string
-        && d.acceptedAnswers[0].size() > 0 && d.acceptedAnswers[0].size() <= 300;
-    }
-
-    function validEssay(d) {
-      return !('sampleAnswer' in d) || (d.sampleAnswer is string && d.sampleAnswer.size() <= 5000);
-    }
+    // ---------- M1: validator DOKUMEN PUBLIK (bebas kunci) ----------
+    //
+    // PENTING: sebelum M1, validator di sini sekaligus memvalidasi soalan dan
+    // kunci dalam satu dokumen. Setelah pemisahan kunci, fungsi-fungsi itu TIDAK
+    // LAGI dipakai untuk dokumen publik: `validSingleChoice` dsb. menuntut
+    // `answerIndex`/`pairs`/`items` yang kini WAJIB tidak ada di dokumen soal
+    // (lihat `hasNoInlineKeyFields`). Kalau dipakai untuk dokumen publik, setiap
+    // soal tanpa kunci akan ditolak — pemisahan kunci jadi tidak bisa dipakai.
+    //
+    // Yang divalidasi di dokumen publik sekarang hanya MATERIAL yang memang
+    // dilihat peserta: opsi, kumpulan kiri/kanan, himpunan item, stem studi
+    // kasus, dan starter code. Validasi kunci pindah ke `keyShapeValid` di
+    // subkoleksi `key/`, dengan pemeriksaan silang ke dokumen soal publik.
 
     // Satu pasangan wajib map dengan left/right string tidak kosong.
     // Hanya bisa dipanggil untuk indeks yang ada (rules tidak iterasi).
@@ -683,29 +691,46 @@ service cloud.firestore {
         && p.right is string && p.right.size() > 0 && p.right.size() <= 300;
     }
 
-    function validMatching(d) {
-      return d.pairs is list && d.pairs.size() >= 2 && d.pairs.size() <= 20
-        && validMatchingPair(d.pairs[0])
-        && validMatchingPair(d.pairs[1]);
+    // Himpunan publik untuk matching: dua sisi harus sama panjang dan unik
+    // (duplikat ditolak di `questionKeySplit`/MatchingBoard juga, tapi rules
+    // ikut menjaga agar data tidak bisa masuk lewat jalur lain).
+    function matchPoolsOk(d) {
+      return d.matchLeft is list && d.matchRight is list
+        && d.matchLeft.size() >= 2 && d.matchLeft.size() <= 20
+        && d.matchRight.size() == d.matchLeft.size()
+        && d.matchLeft.toSet().size() == d.matchLeft.size()
+        && d.matchRight.toSet().size() == d.matchRight.size()
+        && d.matchLeft[0] is string && d.matchLeft[0].size() > 0 && d.matchLeft[0].size() <= 300
+        && d.matchRight[0] is string && d.matchRight[0].size() > 0 && d.matchRight[0].size() <= 300;
     }
 
-    function validOrdering(d) {
-      return d.items is list && d.items.size() >= 2 && d.items.size() <= 20
-        && d.items.toSet().size() == d.items.size()
-        && d.items[0] is string && d.items[0].size() > 0 && d.items[0].size() <= 300
-        && d.items[1] is string && d.items[1].size() > 0 && d.items[1].size() <= 300;
+    // Himpunan publik untuk ordering: unik & non-kosong. Urutan BENAR tidak ada
+    // di sini — itu `items` di dokumen kunci.
+    function orderItemsOk(d) {
+      return d.orderItems is list && d.orderItems.size() >= 2 && d.orderItems.size() <= 20
+        && d.orderItems.toSet().size() == d.orderItems.size()
+        && d.orderItems[0] is string && d.orderItems[0].size() > 0 && d.orderItems[0].size() <= 300
+        && d.orderItems[1] is string && d.orderItems[1].size() > 0 && d.orderItems[1].size() <= 300;
     }
 
-    function validNumerical(d) {
-      return (d.correctValue is int || d.correctValue is float)
-        && (!('tolerance' in d)
-            || ((d.tolerance is int || d.tolerance is float) && d.tolerance >= 0));
-    }
-
-    function validCodeQuestion(d) {
-      return d.starterCode is string && d.starterCode.size() <= 10000
-        && (!('expectedOutput' in d) || (d.expectedOutput is string && d.expectedOutput.size() <= 5000))
-        && (!('sampleSolution' in d) || (d.sampleSolution is string && d.sampleSolution.size() <= 10000));
+    // Sub-soal publik studi kasus. Sama seperti `validCaseStudy` versi lama,
+    // hanya `subQuestions[0]` yang bisa diperiksa (rules tidak bisa iterasi);
+    // keseluruhan daftar divalidasi penuh di sisi client sebelum ditulis.
+    //
+    // `keyFieldNames()` sengaja dideklarasikan di blok M1 DI ATAS fungsi ini:
+    // Firestore rules hanya menerima pemanggilan fungsi yang sudah dideklarasikan
+    // sebelumnya secara tekstual.
+    function validPublicSubQuestion(s) {
+      return s is map
+        && s.type in [
+             'single', 'multiple', 'boolean', 'short_answer',
+             'matching', 'ordering', 'numerical'
+           ]
+        && !('subQuestions' in s) && !('subQuestion' in s)
+        && s.keys().hasAny(keyFieldNames()) == false
+        && (s.type in ['single', 'multiple'] ? optionListOk(s) : true)
+        && (s.type == 'matching' ? matchPoolsOk(s) : true)
+        && (s.type == 'ordering' ? orderItemsOk(s) : true);
     }
 
     // subQuestions boleh KOSONG: `grading.js` memperlakukan daftar kosong sebagai
@@ -724,30 +749,42 @@ service cloud.firestore {
         && d.subQuestions is list && d.subQuestions.size() <= 10
         && (
           d.subQuestions.size() == 0
-          || (
-            d.subQuestions[0] is map
-            && !('subQuestions' in d.subQuestions[0])
-            && !('subQuestion' in d.subQuestions[0])
-            && d.subQuestions[0].type in [
-                 'single', 'multiple', 'boolean', 'short_answer',
-                 'matching', 'ordering', 'numerical'
-               ]
-          )
+          || validPublicSubQuestion(d.subQuestions[0])
         );
     }
 
-    function validQuestionTypeSpecific(d) {
+    // Dispatch validator untuk DOKUMEN PUBLIK. Perhatikan tidak ada satu pun
+    // syarat kunci di sini — itu disengaja (lihat catatan blok di atas).
+    //
+    // PENTING: dispatcher ini memakai `? :`, bukan rantai `||`, dan itu bukan
+    // soal gaya. Rantai `||` di sini membuat engine tetap membaca `d.starterCode`
+    // untuk soal `matching`, sehingga yang muncul "Property starterCode is
+    // undefined on object" (evaluation error) alih-alih `false` biasa. Indikasinya
+    // terlihat di tes: `qk_code_missing` memangDENY, tapi soal `matching` yang
+    // sah ikut gagal dengan error yang sama. Pola yang sama pada kunci membuat
+    // cabang `single`/`multiple` dievaluasi pada setiap penolakan kunci `matching`
+    // sampai menembus batas 1000 ekspresi emulator. Satu cabang per tipe: tepat
+    // satu validator yang dievaluasi, jadi penolakan selalu karena alasan yang
+    // bisa dibaca.
+    function validPublicTypeSpecific(d) {
       let t = ('type' in d) ? d.type : 'single';
-      return (t == 'single' && validSingleChoice(d))
-        || (t == 'multiple' && validMultipleChoice(d))
-        || (t == 'boolean' && validBooleanChoice(d))
-        || (t == 'short_answer' && validShortAnswer(d))
-        || (t == 'essay' && validEssay(d))
-        || (t == 'matching' && validMatching(d))
-        || (t == 'ordering' && validOrdering(d))
-        || (t == 'numerical' && validNumerical(d))
-        || (t == 'code' && validCodeQuestion(d))
-        || (t == 'case_study' && validCaseStudy(d));
+      return t == 'single' ? optionListOk(d)
+        : t == 'multiple' ? optionListOk(d)
+        : t == 'boolean' ? true
+        : t == 'short_answer' ? true
+        : t == 'essay' ? true
+        : t == 'matching' ? matchPoolsOk(d)
+        : t == 'ordering' ? orderItemsOk(d)
+        : t == 'numerical' ? true
+        : t == 'code' ? validStarterCode(d)
+        : t == 'case_study' ? validCaseStudy(d)
+        : false;
+    }
+
+    // `starterCode` wajib ada dan berupa string untuk soal `code`. Dipisah supaya
+    // `d.starterCode` hanya dibaca ketika tipenya memang `code`.
+    function validStarterCode(d) {
+      return d.starterCode is string && d.starterCode.size() <= 10000;
     }
 
     function validQuestion(spaceId, d) {
@@ -768,7 +805,223 @@ service cloud.firestore {
         && (!('deletedAt' in d) || d.deletedAt == null || d.deletedAt is timestamp)
         && 'createdAt' in d && 'updatedAt' in d
         && d.schemaVersion == 1
-        && validQuestionTypeSpecific(d);
+        && validPublicTypeSpecific(d)
+        // M1: dokumen soal publik DILARANG memuat field kunci. Kunci hidup di
+        // `questions/{qid}/key/{rev}`. Tanpa syarat ini, pemisahan kunci hanya
+        // formal: jalur create/update ini bisa tetap menulis kunci inline dan
+        // membatalkan seluruh desain keamanan.
+        && hasNoInlineKeyFields(d)
+        && subQuestionsKeyFree(d);
+    }
+
+    // ---------- M1: pemisahan kunci ----------
+    //
+    // CATATAN: definisi `keyFieldNames()` TIDAK ada di blok ini —IA dideklarasikan
+    // lebih awal, sebelum validator publik yang memakainya (lihat blok "M1:
+    // pemisahan kunci" di atas `optionListOk`).
+
+    // Dokumen soal publik tidak boleh memuat satu pun field kunci.
+    // `subQuestions` tidak masuk daftar: dokumen publik studi kasus memang
+    // boleh (dan harus) punya sub-soal publik. Yang dilarang adalah kunci DI
+    // DALAM sub-soal — dicek oleh `subQuestionsKeyFree` di bawah.
+    function hasNoInlineKeyFields(d) {
+      return d.keys().hasAny(keyFieldNames()) == false;
+    }
+
+    // Sub-soal publik studi kasus juga harus bebas kunci. Rules tidak punya loop,
+    // jadi hanya `subQuestions[0]` yang bisa diperiksa — limitation yang sama
+    // seperti `validCaseStudy` dan `validSnapshotEntry`.
+    function subQuestionsKeyFree(d) {
+      return !('subQuestions' in d)
+        || (d.subQuestions is list
+            && (d.subQuestions.size() == 0
+                || (d.subQuestions[0] is map
+                    && d.subQuestions[0].keys().hasAny(keyFieldNames()) == false)));
+    }
+
+    // Bentuk dokumen kunci yang valid. Field kunci WAJIB ada sesuai tipenya,
+    // dan tidak boleh ada field non-kunci (prompt/options) supaya kunci tidak
+    // jadi sumber data kedua yang bisa berbeda dari dokumen soal.
+    // Field yang milik DOKUMEN SOAL PUBLIK, bukan dokumen kunci. Sub-soal kunci
+    // studi kasus tidak boleh memuat salah satunya, supaya `prompt`/`options`/
+    // `matchLeft` hanya hidup di satu tempat.
+    function publicQuestionFieldNames() {
+      return [
+        'prompt', 'options', 'matchLeft', 'matchRight', 'orderItems',
+        'caseText', 'starterCode', 'topicId', 'explanation', 'difficulty',
+        'visibility', 'tags'
+      ];
+    }
+
+    // Jumlah opsi pada dokumen soal publik. Dipakai untuk menjaga agar kunci
+    // TIDAK PERNAH menunjuk opsi yang tidak ada (mis. `answerIndex: 99` pada
+    // soal yang hanya punya 3 opsi). Sebelumnya dijamin `validSingleChoice`/
+    // `validMultipleChoice` yang membaca `d.options` dari dokumen yang sama;
+    // setelah kunci dipisah, jaminan itu harus diambil lewat `get()`.
+    // Mengembalikan 0 bila `options` tidak ada → semua indeks otomatis ditolak.
+    function publicOptionsSize(spaceId, questionId) {
+      let q = get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId)).data;
+      return ('options' in q && q.options is list) ? q.options.size() : 0;
+    }
+
+    // Opsi pada sub-soal publik `subQuestions[0]` (studi kasus). Batas yang
+    // sama: rules hanya bisa mencapai indeks 0.
+    function publicSubOptionsSize(spaceId, questionId) {
+      let q = get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId)).data;
+      return ('subQuestions' in q && q.subQuestions is list
+              && q.subQuestions.size() > 0
+              && q.subQuestions[0] is map
+              && 'options' in q.subQuestions[0]
+              && q.subQuestions[0].options is list)
+        ? q.subQuestions[0].options.size() : 0;
+    }
+
+    // Bentuk kunci untuk SATU sub-soal studi kasus. Sama seperti validator
+    // publiknya, hanya `subQuestions[0]` yang bisa diperiksa (rules tidak bisa
+    // iterasi) — limitation yang sama sudah berlaku sejak CP1-STEP4.
+    function subKeyShapeValid(spaceId, questionId, s) {
+      let t = s.type;
+      return (t == 'single'
+              && s.answerIndex is int
+              && s.answerIndex >= 0
+              && s.answerIndex < publicSubOptionsSize(spaceId, questionId))
+        || (t == 'multiple'
+            && s.correctIndices is list
+            && s.correctIndices.size() >= 1
+            && s.correctIndices.toSet().size() == s.correctIndices.size()
+            && indicesInRange(publicSubOptionsSize(spaceId, questionId), s.correctIndices))
+        || (t == 'boolean' && s.correctBoolean is bool)
+        || (t == 'short_answer'
+            && s.acceptedAnswers is list
+            && s.acceptedAnswers.size() >= 1 && s.acceptedAnswers.size() <= 20
+            && s.acceptedAnswers[0] is string
+            && s.acceptedAnswers[0].size() > 0 && s.acceptedAnswers[0].size() <= 300)
+        || (t == 'matching'
+            && s.pairs is list && s.pairs.size() >= 2 && s.pairs.size() <= 20
+            && validMatchingPair(s.pairs[0])
+            && validMatchingPair(s.pairs[1]))
+        || (t == 'ordering'
+            && s.items is list && s.items.size() >= 2 && s.items.size() <= 20
+            && s.items.toSet().size() == s.items.size())
+        || (t == 'numerical'
+            && ('correctValue' in s));
+    }
+
+    // Sub-soal kunci hanya boleh memuat field kunci + `type`. Ia TIDAK boleh
+    // membawa material publik (`prompt`/`options`/`matchLeft`/dst) supaya
+    // tidak ada dua sumber truths, dan tidak boleh bersarang dua tingkat.
+    function keySubQuestionValid(spaceId, questionId, s) {
+      return s is map
+        && s.type in [
+             'single', 'multiple', 'boolean', 'short_answer',
+             'matching', 'ordering', 'numerical'
+           ]
+        && !('subQuestions' in s) && !('subQuestion' in s)
+        && s.keys().hasAny(publicQuestionFieldNames()) == false
+        && subKeyShapeValid(spaceId, questionId, s);
+    }
+
+    // Bentuk dokumen kunci yang valid. Field kunci WAJIB ada sesuai tipenya,
+    // dan tidak boleh ada field non-kunci (prompt/options) supaya kunci tidak
+    // jadi sumber data kedua yang bisa berbeda dari dokumen soal.
+    //
+    // CATATAN M1: setelah pemisahan kunci, INI adalah satu-satunya tempat yang
+    // memvalidasi kunci. Setiap pemeriksaan yang dulu ada di validator inline
+    // (rentang indeks, duplikat, bentuk pasangan, keunikan item, batas
+    // 2..20) WAJIB tetap ada di sini — kalau tidak, pemisahan kunci membuka
+    // celah yang sebelumnya tertutup.
+    //
+    // `essay` & `code` tetap boleh TANPA jawaban contoh: keduanya bisa jadi soal
+    // penilaian manual. `validEssay` versi lama juga membolehkan absennya
+    // `sampleAnswer`, jadi mengharuskanya di sini akan mencegah penilaian
+    // manual yang justru merupakan perilaku yang diharapkan.
+    // CATATAN BIAYA EKSPRESI: dispatcher di bawah memakai `? :` (bukan rantai
+    // `||`) dengan sengaja. Rantai `||` untuk kunci harus menguji seluruh
+    // cabang sebelum convicted bila tidak ada yang true, dan `get()` +
+    // `indicesInRange` di cabang single/multiple cukup mahal sampai totalnya
+    // melewati batas 1000 ekspresi milik emulator pada setiap penolakan. Kalau
+    // begitu, penolakan yang justru paling penting berubah jadi "gagal karena
+    // biaya", bukan "gagal karena validasi". Dengan `? :` hanya satu validator
+    // yang dievaluasi, jadi biayanya mengikuti tipe soal masing-masing.
+    function keyShapeValid(spaceId, questionId, d) {
+      let t = ('type' in d) ? d.type : 'single';
+      return t == 'single' ? singleKeyOk(spaceId, questionId, d)
+        : t == 'multiple' ? multipleKeyOk(spaceId, questionId, d)
+        : t == 'boolean' ? booleanKeyOk(d)
+        : t == 'short_answer' ? shortAnswerKeyOk(d)
+        : t == 'essay' ? essayKeyOk(d)
+        : t == 'matching' ? matchingKeyOk(d)
+        : t == 'ordering' ? orderingKeyOk(d)
+        : t == 'numerical' ? numericalKeyOk(d)
+        : t == 'code' ? codeKeyOk(d)
+        : t == 'case_study' ? caseStudyKeyOk(spaceId, questionId, d)
+        : false;
+    }
+
+    function singleKeyOk(spaceId, questionId, d) {
+      let n = publicOptionsSize(spaceId, questionId);
+      return d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex < n;
+    }
+
+    function multipleKeyOk(spaceId, questionId, d) {
+      let idx = d.correctIndices;
+      return idx is list
+        && idx.size() >= 1 && idx.size() <= 20
+        && idx.toSet().size() == idx.size()
+        && indicesInRange(publicOptionsSize(spaceId, questionId), idx);
+    }
+
+    function booleanKeyOk(d) {
+      return d.correctBoolean is bool;
+    }
+
+    function shortAnswerKeyOk(d) {
+      return d.acceptedAnswers is list
+        && d.acceptedAnswers.size() >= 1 && d.acceptedAnswers.size() <= 20
+        && validShortText(d.acceptedAnswers[0]);
+    }
+
+    function essayKeyOk(d) {
+      return !('sampleAnswer' in d)
+        || (d.sampleAnswer is string && d.sampleAnswer.size() <= 5000);
+    }
+
+    function matchingKeyOk(d) {
+      return d.pairs is list && d.pairs.size() >= 2 && d.pairs.size() <= 20
+        && validMatchingPair(d.pairs[0])
+        && validMatchingPair(d.pairs[1]);
+    }
+
+    function orderingKeyOk(d) {
+      return d.items is list && d.items.size() >= 2 && d.items.size() <= 20
+        && d.items.toSet().size() == d.items.size()
+        && validShortText(d.items[0])
+        && validShortText(d.items[1]);
+    }
+
+    function numericalKeyOk(d) {
+      return ('correctValue' in d)
+        && (d.correctValue is int || d.correctValue is float)
+        && (!('tolerance' in d)
+            || ((d.tolerance is int || d.tolerance is float) && d.tolerance >= 0));
+    }
+
+    function codeKeyOk(d) {
+      return !('expectedOutput' in d)
+        || (d.expectedOutput is string && d.expectedOutput.size() <= 5000);
+    }
+
+    function caseStudyKeyOk(spaceId, questionId, d) {
+      return d.subQuestions is list
+        && d.subQuestions.size() <= 10
+        && (d.subQuestions.size() == 0
+            || keySubQuestionValid(spaceId, questionId, d.subQuestions[0]));
+    }
+
+    // Batas panjang teks item kunci (pilihan singkat, item ordering, accepted
+    // answer pertama). Dipisah supaya tidak mengulang ekspresi yang sama.
+    function validShortText(s) {
+      return s is string && s.size() > 0 && s.size() <= 300;
     }
 
     function questionVisibleTo(q, uid) {
@@ -790,6 +1043,78 @@ service cloud.firestore {
 
       allow delete: if isMember(spaceId)
         && resource.data.createdBy == request.auth.uid;
+    }
+
+    // ---------- kunci jawaban (P2) ----------
+    // Path: spaces/{spaceId}/questions/{questionId}/key/{keyRevision}
+    //
+    // INI ADALAH LAPISAN OTORISASI UTAMA dari pemisahan kunci (M1). Field-level
+    // secrecy mustahil di Firestore: selama kunci berada di dokumen yang sama
+    // dengan prompt, siapa pun yang boleh `get` dokumen itu juga bisa membacanya.
+    // Karena itu kunci dipindah ke subkoleksi terpisah, dan DI SINI aturannya:
+    //
+    //   - HANYA `createdBy` soal yang boleh membaca kunci (policy P2). Partner,
+    //     anggota lain, dan anonymous TIDAK.
+    //   - Kunci yang sudah ada tidak boleh ditimpa dengan isi berbeda
+    //     (immutability revisi): kalau boleh, attempt lama yang menunjuk
+    //     revisi ini bisa diam-diam dinilai dengan kunci yang sudah diubah.
+    //   - Penulisan revisi baru hanya boleh oleh owner soal yang sama.
+    //
+    // PEMBATASAN YANG DISENGAJA: rules tidak bisa membuktikan bahwa sebuah
+    // attempt benar-benar memakai revisi tertentu, jadi "revisi masih dipakai"
+    // tidak bisa dicek di sini. Pengaman itu ada di `questionKeyService` sisi
+    // client dan, yang menentukan, di Functions yang membaca kunci. Rules tetap
+    // menutup jalur "partner langsung get kunci", yang selama ini jadi celah
+    // paling nyata.
+    match /spaces/{spaceId}/questions/{questionId}/key/{keyRevision} {
+      // `exists()` WAJIB ditulis lebih dulu. Tanpa itu, kunci untuk soal yang
+      // tidak ada membuat `get(...).data.createdBy` melempar evaluation error,
+      // bukan `false` - penolakan jadi "gagal karena salah baca dokumen", bukan
+      // "gagal karena tidak berhak". `exists()` tidak menambah celah apa pun:
+      // soal yang tidak ada memang tidak punya pemilik.
+      function isQuestionOwner() {
+        let q = /databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId);
+        return exists(q) && get(q).data.createdBy == request.auth.uid;
+      }
+
+      // Dokumen kunci hanya boleh memuat field kunci + meta revisi. Field
+      // non-kunci (prompt, options) TIDAK boleh ditulis di sini supaya tidak
+      // ada dua sumber kebenaran yang bisa berbeda.
+      //
+      // `validKeyDoc` juga menolak field milik soal publik secara EKSPLISIT lewat
+      // `publicQuestionFieldNames()`. Tanpa itu, kunci boleh membawa `prompt`/
+      // `options` sendiri: nilainya bisa berbeda dari dokumen soal, dan pembacaan
+      // kunci lalu tidak lagi deterministik.
+      function validKeyDoc(d) {
+        return d.keyRevision == keyRevision
+          && d.type in [
+               'single', 'multiple', 'boolean', 'short_answer', 'essay',
+               'matching', 'ordering', 'numerical', 'code', 'case_study'
+             ]
+          && d.schemaVersion == 1
+          && d.keys().hasAny(publicQuestionFieldNames()) == false
+          && keyShapeValid(spaceId, questionId, d);
+      }
+
+      allow get: if isMember(spaceId) && isQuestionOwner();
+      allow list: if isMember(spaceId) && isQuestionOwner();
+
+      allow create: if isMember(spaceId) && isQuestionOwner()
+        && validKeyDoc(request.resource.data)
+        // Immutability: kalau dokumen ini sudah ada, isinya WAJIB sama
+        // persis. Ini yang membuat migrasi bisa diulang tanpa mengubah
+        // makna attempt lama.
+        && (!exists(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId)/key/$(keyRevision))
+            || request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['createdAt', 'updatedAt']));
+
+      // Kunci yang sudah tertulis tidak boleh diubah isinya sama sekali.
+      allow update: if false;
+
+      // Menghapus revisi kunci berarti attempt lama yang menunjuk revisi itu
+      // tidak bisa dinilai lagi. Dilarang total di rules; kalau memang perlu,
+      // operasinya lewat proses migrasi yang diawasi (Functions/Admin).
+      allow delete: if false;
     }
 
     // ---------- reports soal ----------
@@ -898,6 +1223,19 @@ service cloud.firestore {
         && d.questionIds.toSet().size() == d.questionIds.size()
         && (d.questionIds.size() == 0
             || (d.questionIds[0] is string && d.questionIds[0].size() > 0 && d.questionIds[0].size() <= 100))
+        // `questionKeyRevisions` (M6): nomor revisi kunci yang dikunci kuis ini,
+        // ditulis client setiap kali `questionIds` berubah. Yang disimpan HANYA
+        // nomor revisi; isi kunci tetap tinggal di
+        // `questions/{id}/key/{keyRevision}` yang tidak bisa dibaca peserta.
+        //
+        // Bentuk nilainya (string desimal) dijamin oleh penulisnya di client
+        // (`buildQuizKeyManifest` hanya memuat hasil normalisasi). Rules tidak
+        // punya loop dan kunci map tidak bisa dibaca dinamis, jadi nilainya
+        // tidak bisa diperiksa di sini tanpa berisiko menolak kuis yang sah -
+        // yang diperiksa cukup map-nya dan batasnya.
+        && (!('questionKeyRevisions' in d) || (d.questionKeyRevisions is map
+            && d.questionKeyRevisions.size() >= 0
+            && d.questionKeyRevisions.size() <= d.questionIds.size()))
         && d.settings is map && validQuizSettings(d.settings)
         && d.createdBy is string && d.createdBy.size() > 0
         && 'createdAt' in d && d.createdAt is timestamp
@@ -1014,8 +1352,14 @@ service cloud.firestore {
                && validQuestionTypeSpecific(e)));
     }
 
-    // Versi 2: snapshot memuat isi soal. Versi 1 (array ID) sudah tidak dipakai
-    // — tidak pernah ada attempt versi 1 di emulator saat skema ini diubah.
+    // Versi 2: snapshot memuat isi soal LENGKAP — termasuk kunci jawaban.
+    // Versi 1 (array ID) sudah tidak dipakai (tidak pernah ada attempt versi 1
+    // di emulator saat skema ini diubah).
+    //
+    // v2 hanya boleh untuk attempt LAMA. Attempt BARU WAJIB v3 (lihat
+    // `validQuizAttemptV3` + aturan create di bawah): kalau create masih
+    // mengizinkan v2, peserta bisa sengaja membuat attempt v2 lalu menulis
+    // skornya sendiri — jalur penskoran ulang yang sedang ditutup.
     function validQuizAttempt(spaceId, quizId, d) {
       // Kuis induk harus benar-benar ada. Ini sekaligus memberi makna pada
       // parameter `spaceId` (rules menolak parameter yang tak terpakai) dan
@@ -1037,6 +1381,218 @@ service cloud.firestore {
         && (!('passed' in d) || d.passed is bool)
         && (!('status' in d) || d.status in ['in_progress', 'completed', 'pending_manual_grade', 'graded'])
         && d.schemaVersion == 2;
+    }
+
+    // ---------- M4: snapshot attempt v3 (TANPA kunci) ----------
+    //
+    // Ini menutup kebocoran terbesar di desain lama: dokumen attempt dibaca
+    // PESERTA, jadi selama `questionSnapshot` masih menyalin kunci, memindahkan
+    // kunci di Question Bank saja tidak cukup.
+    //
+    // Entri v3 hanya boleh memuat: identitas entri, revisi kunci yang dipakai,
+    // dan material publik untuk menjawab (prompt, poin, opsi, teks kasus, kode
+    // awal, kolam kandidat matching, himpunan item ordering).
+    function validSnapshotEntryV3(e) {
+      return e is map
+        && e.id is string && e.id.size() > 0 && e.id.size() <= 128
+        && e.type in [
+             'single', 'multiple', 'boolean', 'short_answer', 'essay',
+             'matching', 'ordering', 'numerical', 'code', 'case_study',
+             'unavailable'
+           ]
+        && e.prompt is string && e.prompt.size() <= 5000
+        // Revisi kunci WAJIB ada. Tanpa itu, server tidak tahu kunci mana yang
+        // harus dipakai untuk attempt lama — dan "pakai yang terbaru" adalah
+        // kesalahan yang akan mengubah nilai attempt yang sudah lewat.
+        && ('keyRevision' in e) && e.keyRevision is string
+        && e.keyRevision.matches('^[1-9][0-9]*$')
+        // Prinsip utama: TIDAK ADA field kunci yang boleh masuk.
+        && hasNoInlineKeyFields(e)
+        // `explanation` sering membocorkan kunci ("pilih yang berlawanan dengan
+        // petunjuk di soal"), jadi tidak dikirim ke peserta sebelum attempt
+        // selesai. `pairDraft` murni data editor.
+        && !('explanation' in e)
+        && !('pairDraft' in e)
+        // Key container untuk studi kasus harus bebas kunci, sama seperti soal.
+        && subQuestionsKeyFree(e)
+        && (e.type == 'unavailable'
+            ? (e.points == 0
+               && ('available' in e) && e.available == false
+               && e.keys().hasAny(['options', 'caseText', 'starterCode', 'matchLeft', 'matchRight', 'orderItems', 'subQuestions']) == false)
+            : (e.points is int && e.points >= 1 && e.points <= 100
+               && (!('available' in e) || e.available == true)
+               // Material publik harus memuat apa yang dibutuhkan untuk menjawab.
+               && snapshotPublicMaterialPresent(e)));
+    }
+
+    // Syarat minimum agar soal masih bisa dijawab. Menolak entri yang "aman tapi
+    // tidak bisa dijawab" penting: entry seperti itu akan menghasilkan attempt
+    // yang mandek atau salah dinilai.
+    function snapshotPublicMaterialPresent(e) {
+      return (e.type in ['single', 'multiple'] && e.options is list && e.options.size() >= 2)
+        || (e.type == 'matching' && e.matchLeft is list && e.matchLeft.size() >= 1
+            && e.matchRight is list && e.matchRight.size() >= 1)
+        || (e.type == 'ordering' && e.orderItems is list && e.orderItems.size() >= 2)
+        || (e.type == 'code' && e.starterCode is string)
+        || (e.type == 'case_study' && e.caseText is string
+            && e.subQuestions is list && e.subQuestions.size() >= 1)
+        || (e.type in ['boolean', 'short_answer', 'essay', 'numerical']);
+    }
+
+    // Attempt v3: snapshot bebas kunci, skor OTORITATIF server, dan `fraction`
+    // tidak pernah ikut karena `grading.js` memang tidak menyimpannya.
+    function validQuizAttemptV3(spaceId, quizId, d) {
+      return exists(/databases/$(database)/documents/spaces/$(spaceId)/quizzes/$(quizId))
+        && d.uid is string && d.uid.size() > 0
+        && d.quizId is string && d.quizId == quizId
+        && d.startedAt is timestamp
+        && d.questionSnapshot is list && d.questionSnapshot.size() >= 1 && d.questionSnapshot.size() <= 50
+        && validSnapshotEntryV3(d.questionSnapshot[0])
+        && d.answers is list && d.answers.size() == d.questionSnapshot.size()
+        && (!('completedAt' in d) || d.completedAt == null || d.completedAt is timestamp)
+        && (!('durationSeconds' in d) || d.durationSeconds == null
+            || (d.durationSeconds is int && d.durationSeconds >= 0 && d.durationSeconds <= 604800))
+        // `submittedAt` menandai peserta selesai; TANPA itu server tidak
+        // menilai, dan attempt tetap `in_progress` sehingga tidak terlihat
+        // utuh. Absen dulu (saat jawaban masih diisi), terisi saat submit.
+        // Penilaiannya sendiri: server, bukan client.
+        && (!('submittedAt' in d) || d.submittedAt == null || d.submittedAt is timestamp)
+        && (!('status' in d) || d.status in [
+             'in_progress', 'pending_grading', 'pending_manual_grade', 'graded', 'completed'
+           ])
+        && d.schemaVersion == 3;
+    }
+
+    // Field skor otoritatif. Untuk v3, TIDAK BOLEH diubah oleh client — hanya
+    // server (Admin SDK, yang melewati rules) yang boleh. Inilah yang menutup
+    // celah "pemilik attempt menimpa skornya sendiri setelah selesai".
+    function serverOwnedScoreFields() {
+      return [
+        'score', 'maxScore', 'scorePercent', 'passed',
+        'isAuthoritative', 'scoreSource', 'gradedAt', 'answersHash',
+        'pendingManualCount'
+      ];
+    }
+
+    // Penulisan v3 oleh client dibatasi pada jawaban + penanda submit saja.
+    // Field yang boleh ada di entri `answers[]` untuk MASING-MING AKTOR.
+    //
+    // Dipakai ALLOWLIST, bukan daftar field terlarang. Alasannya: metadata
+    // penilaian (`isCorrect`, `pointsEarned`, `manualScore`, `gradedBy`, ...)
+    // milik server, dan rules tidak bisa menebak makna nama field yang belum
+    // dikenal. Dengan daftar terlarang, cukup menulis satu nama baru untuk
+    // menyelundupkan nilai ke attempt; dengan allowlist, apa pun yang tidak
+    // disebut di sini otomatis ditolak.
+    //
+    // Dua daftar karena dua hak yang berbeda: peserta hanya boleh menulis
+    // jawabannya, partner (yang menilai manual) boleh menambah penilaian
+    // manual. Skor otoritatif TIDAK ada di keduanya - itu tetap milik server
+    // dan dicek terpisah lewat `changed()`.
+    function ownerAnswerEntryOk(after) {
+      return after is map
+        && after.keys().hasOnly(['questionId', 'userAnswer'])
+        && after.questionId is string
+        && 'userAnswer' in after;
+    }
+
+    function partnerAnswerEntryOk(after) {
+      return after is map
+        && after.keys().hasOnly([
+             'questionId', 'userAnswer',
+             'manualScore', 'manualFeedback', 'gradedBy', 'gradedAt'
+           ]);
+    }
+
+    function attemptOwnerUpdateV3() {
+      return immutable(['uid', 'quizId', 'startedAt', 'questionSnapshot', 'schemaVersion'])
+        && changed().hasAny(serverOwnedScoreFields()) == false
+        && attemptOwnerStatusOk()
+        // Entri jawaban tidak boleh membawa apa pun selain jawaban peserta.
+        // `answers` kosong dilewati: tidak ada entri untuk diselundupkan apa pun.
+        && (request.resource.data.answers.size() == 0
+            || ownerAnswerEntryOk(request.resource.data.answers[0]))
+        // Setelah `submittedAt` terisi, isi jawaban terkunci. Perubahan jawaban
+        // setelah submit harus dicegat, bukan diterima diam-diam. Absennya
+        // `submittedAt` (jawaban masih diisi) tetap boleh mengubah `answers`.
+        && (!('submittedAt' in resource.data) || resource.data.submittedAt == null
+            || changed().hasAny(['answers']) == false);
+    }
+
+    // Partner/penilai hanya boleh mengisi nilai manual pada attempt yang sudah
+    // dikirim, dan TIDAK BOLEH menyentuh satu pun field skor otoritatif.
+    // Partner boleh menambah penilaian manual, tapi tidak boleh menyentuh
+    // jawaban peserta (`answerEntryStableV3`) maupun skor otoritatif
+    // (`changed()` di bawah).
+    function attemptManualOnlyV3() {
+      return ('submittedAt' in resource.data) && resource.data.submittedAt != null
+        && changed().hasAny(serverOwnedScoreFields()) == false
+        && changed().hasOnly(['answers'])
+        && request.resource.data.answers.size() == resource.data.answers.size()
+        && partnerAnswerEntryOk(request.resource.data.answers[0])
+        && answerEntryStableV3(request.resource.data.answers[0], resource.data.answers[0]);
+    }
+
+    // Saat penilai menulis ulang `answers` (Firestore tidak mendukung update
+    // field di dalam array), `userAnswer` WAJIB tetap sama supaya nilai manual
+    // tidak bisa dipakai untuk menimpa jawaban peserta.
+    function answerEntryStableV3(after, before) {
+      return after is map
+        && before is map
+        && after.questionId == before.questionId
+        && after.userAnswer == before.userAnswer;
+    }
+
+    // ---------- P2: author exclusion ----------
+    //
+    // Quiz dibuat dari soal yang ada di Question Bank. Kalau penulis soal ikut
+    // mengerjakan kuis yang memuat soal miliknya, dia bisa menilai jawabannya
+    // sendiri (dan, lebih buruk, `correctIndices` miliknya bisa "disesuaikan"
+    // setelah melihat jawaban). Karena itu attempt yang memuat soal buatan
+    // sendiri harus DITOLAK.
+    //
+    // CATATAN BATAS: rules tidak punya loop, jadi hanya `questionIds[0..7]`
+    // yang diperiksa. Quiz dengan lebih dari 8 soal masih aman karena
+    // pemeriksaan yang menentukan ada di Functions (Admin SDK) yang bisa
+    // looping penuh. Batas ini sengaja terdokumentasi, bukan disembunyikan.
+    function quizQuestionIdAt(spaceId, quizId, i) {
+      let q = get(/databases/$(database)/documents/spaces/$(spaceId)/quizzes/$(quizId)).data;
+      return ('questionIds' in q && q.questionIds is list && i < q.questionIds.size())
+        ? q.questionIds[i] : '';
+    }
+
+    // `exists()` wajib mendahului `get()`: membaca dokumen yang tidak ada
+    // menghasilkan evaluation error, bukan simply `false`.
+    function questionAuthoredBy(spaceId, questionId, uid) {
+      return questionId != ''
+        && exists(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId))
+        && get(/databases/$(database)/documents/spaces/$(spaceId)/questions/$(questionId))
+             .data.createdBy == uid;
+    }
+
+    function attemptExcludesAuthor(spaceId, quizId, uid) {
+      return !(questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 0), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 1), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 2), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 3), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 4), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 5), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 6), uid)
+        || questionAuthoredBy(spaceId, quizQuestionIdAt(spaceId, quizId, 7), uid));
+    }
+
+    // ---------- v3: status hanya boleh maju lewat jalur yang sah ----------
+    //
+    // Peserta boleh: tetap `in_progress` (menyimpan jawaban), lalu
+    // `pending_grading` sambil memasang `submittedAt` (menyerahkan jawaban).
+    // Peserta TIDAK boleh menetapkan `pending_manual_grade`/`graded`/
+    // `completed` karena itu keputusan server. Tanpa aturan ini peserta bisa
+    // menandai attempt-nya sendiri "graded" tanpa nilai apa pun.
+    function attemptOwnerStatusOk() {
+      return (!('status' in request.resource.data)
+            || request.resource.data.status == 'in_progress')
+        || (request.resource.data.status == 'pending_grading'
+            && ('submittedAt' in request.resource.data)
+            && request.resource.data.submittedAt != null);
     }
 
     // Field struktural attempt: melekat sejak create dan tidak boleh berubah.
@@ -1090,24 +1646,35 @@ service cloud.firestore {
       // shared — partner tidak boleh membaca attempt orang lain.
       allow get, list: if isMember(spaceId) && resource.data.uid == request.auth.uid;
 
+      // Attempt BARU selalu v3. v2 tidak lagi boleh dibuat: kalau masih bisa,
+      // peserta bisa memilih versi yang skornya ditulis client.
+      // Legacy v2 adalah kompatibilitas historis, BUKAN jalur pembuatan baru.
       allow create: if isMember(spaceId)
-        && validQuizAttempt(spaceId, quizId, request.resource.data)
+        && validQuizAttemptV3(spaceId, quizId, request.resource.data)
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.status == 'in_progress';
+        && request.resource.data.status == 'in_progress'
+        && attemptExcludesAuthor(spaceId, quizId, request.auth.uid);
 
-      // Pemilik: menutup attempt & menyimpan jawaban selama belum ditutup.
+      // Update:=v3 memakai aturan v3 (tanpa skor), v2 memakai aturan legacy.
+      // Pemisahan ini disengaja: attempt v2 yang sudah terlanjur ada tidak
+      // boleh rusak karena rules diperketat, tapi tidak boleh juga dipakai
+      // membuat attempt baru lewat jalur update.
       allow update: if isMember(spaceId)
         && resource.data.uid == request.auth.uid
-        && attemptOwnerUpdate()
-        && validQuizAttempt(spaceId, quizId, request.resource.data);
+        && (resource.data.schemaVersion == 3
+            ? attemptOwnerUpdateV3() && validQuizAttemptV3(spaceId, quizId, request.resource.data)
+            : resource.data.schemaVersion == 2
+              && attemptOwnerUpdate() && validQuizAttempt(spaceId, quizId, request.resource.data));
 
-      // Partner: nilai manual HANYA pada attempt yang sudah selesai (bukan
-      // `in_progress`), dan HANYA pada field manual.
+      // Partner: nilai manual HANYA pada attempt yang sudah dikirim (bukan
+      // `in_progress`), dan TIDAK BOLEH menyentuh field skor otoritatif.
       allow update: if isMember(spaceId)
         && resource.data.uid != request.auth.uid
-        && resource.data.status != 'in_progress'
-        && attemptManualOnly()
-        && validQuizAttempt(spaceId, quizId, request.resource.data);
+        && (resource.data.schemaVersion == 3
+            ? attemptManualOnlyV3() && validQuizAttemptV3(spaceId, quizId, request.resource.data)
+            : resource.data.schemaVersion == 2
+              && resource.data.status != 'in_progress'
+              && attemptManualOnly() && validQuizAttempt(spaceId, quizId, request.resource.data));
 
       // Attempt adalah catatan historis: tidak boleh dihapus.
       allow delete: if false;

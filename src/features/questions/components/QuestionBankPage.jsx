@@ -14,6 +14,7 @@ import { spaceRoles } from '../../space/services/spaceService';
 import { useUserProfile } from '../../space/hooks/useUserProfile';
 import { useTopics } from '../../topics/hooks/useTopics';
 import { useQuestions } from '../hooks/useQuestions';
+import { useQuestionKeys } from '../hooks/useQuestionKeys';
 import {
   purgeQuestion,
   restoreQuestion,
@@ -37,6 +38,9 @@ export default function QuestionBankPage() {
 
   const { data: topics = [] } = useTopics(spaceId);
   const { data: questions = [], loading, error } = useQuestions(spaceId);
+  // Kunci jawaban dimuat terpisah dan HANYA untuk soal milik sendiri (policy P2).
+  // Partner yang membuka kartu soal orang lain tetap tidak menerima kunci.
+  const { keys: questionKeys } = useQuestionKeys(spaceId, questions);
 
   // Filter States
   const [search, setSearch] = useState('');
@@ -286,6 +290,8 @@ export default function QuestionBankPage() {
         spaceId={spaceId}
         topics={topics}
         initialData={editTarget}
+        keyData={editTarget ? questionKeys.get(editTarget.id) || null : null}
+        isOwner={Boolean(editTarget && editTarget.createdBy === user?.uid)}
       />
 
       <QuestionDetailModal
@@ -293,6 +299,7 @@ export default function QuestionBankPage() {
         onClose={() => setPreviewTarget(null)}
         spaceId={spaceId}
         question={previewTarget}
+        questionKey={previewTarget ? questionKeys.get(previewTarget.id) || null : null}
         isOwner={previewTarget?.createdBy === user?.uid}
         onReport={(q) => {
           setPreviewTarget(null);

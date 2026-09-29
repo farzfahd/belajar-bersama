@@ -55,6 +55,16 @@ describe('checkQuestionComplete', () => {
     assert.equal(checkQuestionComplete({ ...base, correctIndices: [0] }).ok, true);
   });
 
+  it('multi-select butuh minimal satu pengecoh (K < N)', () => {
+    // Kartu inline menyimpan lewat `checkQuestionComplete`, jadi authoring
+    // inline otomatis ikut aturan yang sama dengan modal & builder.
+    const base = { ...emptyQuestionDraft('t1', 'multiple'), prompt: 'p', options: ['a', 'b', 'c'] };
+    const semua = checkQuestionComplete({ ...base, correctIndices: [0, 1, 2] });
+    assert.equal(semua.ok, false, 'K=N tidak boleh lolos simpan');
+    assert.match(semua.error, /pengecoh/);
+    assert.equal(checkQuestionComplete({ ...base, correctIndices: [0, 1] }).ok, true);
+  });
+
   it('Benar/Salah, Isian Singkat, Numerik, Uraian bisa lengkap', () => {
     assert.equal(checkQuestionComplete(validFor('boolean')).ok, true);
     assert.equal(checkQuestionComplete({ ...validFor('short_answer'), acceptedAnswers: ['ya'] }).ok, true);
@@ -291,10 +301,20 @@ describe('batasan sub-soal studi kasus (dijaga rules, bukan UI)', () => {
     // Implementation rules hanya mengizinkan 7 tipe di atas (lihat
     // KNOWN-LIMITATION di docs/PROGRESS.md); daftar itu yang dipakai.
     const rules = readFileSync(join(root, 'firestore.rules'), 'utf8');
-    const fn = rules.slice(rules.indexOf('function validCaseStudy('));
-    // Daftar tipe ada di `d.subQuestions[0].type in [ ... ]` — 반드시 pakai
-    // penanda `in [`, bukan `[` pertama (itu `[0]`).
-    const start = fn.indexOf('in [') + 'in '.length;
+    // Anchor-nya `validPublicSubQuestion`, bukan `validCaseStudy`: saat rewrite
+    // rules, `validCaseStudy` cuma memvalidasi amplop studi kasus dan
+    // mendelegasikan tiap elemen ke `validPublicSubQuestion`. Menambatkan
+    // tes ke `validCaseStudy` membuat tes ini diam-diam membaca daftar tipe
+    // yang salah begitu ada `in [` lain di dalam fungsi itu - dan karena
+    // `assert.deepEqual(fromRules, [...])` sudah gagal duluan, yang terlihat
+    // hanyalah "rules berubah", tanpa tahu daftar mana yang sebenarnya hilang.
+    // Fungsi inilah yang memegang daftar 7 tipe, jadi ke sini.
+    const anchor = 'function validPublicSubQuestion(';
+    assert.ok(rules.includes(anchor), `firestore.rules harus punya ${anchor}`);
+    const fn = rules.slice(rules.indexOf(anchor));
+    // Daftar tipe ada di `s.type in [ ... ]` — pakai penanda `type in [` supaya
+    // tidak tertangkap `[0]` (indeks list) maupun daftar `in [` lain di fungsi.
+    const start = fn.indexOf('type in [') + 'type '.length;
     const list = fn.slice(start, fn.indexOf(']', start) + 1);
     const fromRules = [...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
 
